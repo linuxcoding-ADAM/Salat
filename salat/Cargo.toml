@@ -1,0 +1,23 @@
+[package]
+name = "salat"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "MIT OR Apache-2.0"
+description = "Prayer times and Adhan for the Linux terminal"
+repository = "https://github.com/OWNER/salat"
+publish = false
+
+[dependencies]
+clap = { version = "4.6.6", features = ["derive", "wrap_help"] }
+color-eyre = "0.6.5"
+directories = "6.0.0"
+is-terminal = "0.4.17"
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+tempfile = "3.27.0"

@@ -1,0 +1,11 @@
+# Build artifacts
+/target
+**/target
+
+# Editor and OS noise
+*.swp
+*~
+.DS_Store
+
+# Claude Code local settings
+.claude/

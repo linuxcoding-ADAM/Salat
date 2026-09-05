@@ -1,0 +1,12 @@
+# The Clock trait (§6.6) is the only source of "now". These methods are
+# disallowed everywhere except app::clock::SystemClock, so a hand-written
+# wall-clock read is a lint failure, not a review comment (§18.3, §24.1 gate 7).
+disallowed-methods = [
+    { path = "chrono::Utc::now", reason = "use app::clock::SystemClock (§6.6); the Clock trait is the only source of 'now'" },
+    { path = "chrono::Local::now", reason = "use app::clock::SystemClock (§6.6); the Clock trait is the only source of 'now'" },
+    { path = "std::time::SystemTime::now", reason = "use app::clock::SystemClock (§6.6); the Clock trait is the only source of 'now'" },
+]
+
+# §18.3 forbids unwrap/expect outside tests; inside tests they are the
+# idiomatic assertion, so the lint (denied in lib.rs) relaxes here.
+allow-unwrap-in-tests = true
