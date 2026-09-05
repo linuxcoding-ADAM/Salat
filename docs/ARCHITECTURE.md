@@ -519,7 +519,8 @@ Success shape: `{ code: 200, status: "OK", data: [ { timings: {...}, date: {...}
 Two verified API behaviours make client-side validation a correctness requirement, not politeness:
 
 - **Invalid latitude returns HTTP 503, not 400** ✅. `latitude=999` yields `"Timezone lookup is temporarily unavailable. Please try again later."` — a user typing a bad coordinate would be shown a fabricated outage. Validate `-90 ≤ lat ≤ 90`, `-180 ≤ lng ≤ 180` before any request, with error `E101`.
-- **An invalid method returns HTTP 200 with silently wrong times** ✅. `method=777` succeeds and returns different, incorrect timings. Validate `method ∈ {0..=15, 17..=23, 99}` (the set from `/v1/methods`) before any request, with error `E102`. This is a data-integrity hazard: an unvalidated typo produces plausible prayer times that are wrong all year.
+- **An invalid method returns HTTP 200 with silently wrong times** ✅. `method=777` succeeds and returns different, incorrect timings. Validate `method ∈ {0..=5, 7..=23, 99}` (the set from `/v1/methods`) before any request, with error `E102`. This is a data-integrity hazard: an unvalidated typo produces plausible prayer times that are wrong all year.
+  - *Corrected 2026-09-05 (Phase 2 fixture capture):* the planning-time set `{0..=15, 17..=23, 99}` had drifted from the API. `/v1/methods` now lists no method `6` and does list `16` (Dubai, experimental); verified live that `method=6` is **silently remapped to ISNA** (meta echoes ISNA, not the sent id — precisely this section's hazard), while `method=16` answers with matching Dubai times. The committed `tests/fixtures/aladhan/methods.json` is the evidence, and an api unit test asserts the whitelist equals its id set exactly, so the next drift fails a test instead of shipping wrong times.
 
 Also validate `school ∈ {0,1}`, `latitudeAdjustmentMethod ∈ {1,2,3}`, `midnightMode ∈ {0,1}`, each `tune` element in `-60..=60`, and `timezonestring` parseable by `chrono_tz`.
 

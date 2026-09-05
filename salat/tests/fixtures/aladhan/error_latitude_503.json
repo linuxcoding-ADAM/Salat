@@ -1,0 +1,5 @@
+{
+    "code": 503,
+    "status": "SERVER_ERROR",
+    "data": "Timezone lookup is temporarily unavailable. Please try again later."
+}

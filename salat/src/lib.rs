@@ -19,7 +19,7 @@ pub mod error;
 
 pub mod config;
 
-mod api;
+pub mod api;
 mod audio;
 mod cache;
 mod domain;

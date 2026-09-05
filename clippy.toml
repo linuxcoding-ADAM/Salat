@@ -10,3 +10,4 @@ disallowed-methods = [
 # §18.3 forbids unwrap/expect outside tests; inside tests they are the
 # idiomatic assertion, so the lint (denied in lib.rs) relaxes here.
 allow-unwrap-in-tests = true
+allow-expect-in-tests = true

@@ -1,0 +1,5 @@
+{
+    "code": 400,
+    "status": "BAD_REQUEST",
+    "data": "Unable to geocode address: zzzznotacity, zzzz"
+}

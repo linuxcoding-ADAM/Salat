@@ -16,10 +16,13 @@ use super::{
 };
 
 /// The AlAdhan method ids this build will send (§7.4): the verified set
-/// from `/v1/methods`. Anything else makes the API return silently wrong
-/// times, so an unknown id is rejected before any request.
+/// from `/v1/methods` — recorded in
+/// `tests/fixtures/aladhan/methods.json`, and pinned to this function by
+/// an `api::dto` test. Anything else either fails or is silently remapped
+/// (`method=6` answers as ISNA), so an unknown id is rejected before any
+/// request.
 pub fn is_valid_method(method: u32) -> bool {
-    matches!(method, 0..=15 | 17..=23 | 99)
+    matches!(method, 0..=5 | 7..=23 | 99)
 }
 
 /// One semantic violation: the dotted key that is wrong, and why.
@@ -241,7 +244,7 @@ mod tests {
         config.location.latitude = 999.0;
         config.location.longitude = -999.0;
         config.location.timezone = "Not/AZone".into();
-        config.calculation.method = 16; // the one gap in the §7.4 whitelist
+        config.calculation.method = 6; // silently remapped to ISNA (§7.4)
         config.calculation.school = 2;
         config.calculation.latitude_adjustment_method = 0;
         config.calculation.midnight_mode = 7;
@@ -282,13 +285,14 @@ mod tests {
         assert_eq!(violations.len(), 15);
     }
 
-    /// §7.4's whitelist shape: the contiguous ranges, the 16 gap, and 99.
+    /// §7.4's whitelist shape: the contiguous ranges, the 6 gap (silently
+    /// remapped to ISNA by the API), and 99.
     #[test]
     fn method_whitelist_matches_the_api() {
-        for valid in [0, 1, 15, 17, 20, 23, 99] {
+        for valid in [0, 5, 15, 16, 17, 20, 23, 99] {
             assert!(is_valid_method(valid), "{valid} must be valid");
         }
-        for invalid in [16, 24, 77, 98, 100, 1000, 777] {
+        for invalid in [6, 24, 77, 98, 100, 1000, 777] {
             assert!(!is_valid_method(invalid), "{invalid} must be invalid");
         }
     }
