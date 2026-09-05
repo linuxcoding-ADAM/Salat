@@ -8,6 +8,7 @@
 //! and titles are the contract.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::process::ExitCode as ProcessExitCode;
 
 /// The actions the ERROR screen offers for an error (§18.2).
@@ -83,12 +84,22 @@ pub enum SalatError {
     /// `E103` — no timezone could be determined for the location.
     #[error("timezone not detected")]
     TimezoneUndetermined,
-    /// `E201` — the configuration file failed semantic validation.
+    /// `E201` — the configuration file failed validation (or parsing):
+    /// every problem, not just the first (§8.4).
     #[error("configuration invalid")]
-    ConfigInvalid,
-    /// `E202` — the configuration file could not be written.
-    #[error("could not save settings")]
-    ConfigWriteFailed,
+    ConfigInvalid {
+        /// One line per violation/parse problem, without the `→ ` prefix.
+        problems: Vec<String>,
+    },
+    /// `E202` — the configuration file could not be written. Display
+    /// matches the §14.6 specimen `cannot write configuration to …`.
+    #[error("cannot write configuration to {path}")]
+    ConfigWriteFailed {
+        /// The file that was being written.
+        path: PathBuf,
+        /// Why the write failed (errno text, editor exit, …).
+        cause: String,
+    },
     /// `E301` — no prayer times for the requested day (network failed, no
     /// cached row).
     #[error("prayer times unavailable")]
@@ -132,8 +143,8 @@ impl SalatError {
             SalatError::InvalidCoordinates => "E101",
             SalatError::InvalidMethod => "E102",
             SalatError::TimezoneUndetermined => "E103",
-            SalatError::ConfigInvalid => "E201",
-            SalatError::ConfigWriteFailed => "E202",
+            SalatError::ConfigInvalid { .. } => "E201",
+            SalatError::ConfigWriteFailed { .. } => "E202",
             SalatError::PrayerTimesUnavailable => "E301",
             SalatError::ApiUnreachable => "E302",
             SalatError::ApiMalformed => "E303",
@@ -154,8 +165,8 @@ impl SalatError {
             SalatError::InvalidCoordinates => "INVALID COORDINATES",
             SalatError::InvalidMethod => "INVALID CALCULATION METHOD",
             SalatError::TimezoneUndetermined => "TIMEZONE NOT DETECTED",
-            SalatError::ConfigInvalid => "CONFIGURATION INVALID",
-            SalatError::ConfigWriteFailed => "COULD NOT SAVE SETTINGS",
+            SalatError::ConfigInvalid { .. } => "CONFIGURATION INVALID",
+            SalatError::ConfigWriteFailed { .. } => "COULD NOT SAVE SETTINGS",
             SalatError::PrayerTimesUnavailable => "PRAYER TIMES UNAVAILABLE",
             SalatError::ApiUnreachable => "API UNREACHABLE",
             SalatError::ApiMalformed => "UNEXPECTED API RESPONSE",
@@ -186,10 +197,14 @@ impl SalatError {
             SalatError::TimezoneUndetermined => {
                 vec!["→ no timezone could be determined for this location".into()]
             }
-            SalatError::ConfigInvalid => vec!["→ the configuration failed validation".into()],
-            SalatError::ConfigWriteFailed => {
-                vec!["→ the configuration file could not be written".into()]
+            SalatError::ConfigInvalid { problems } => {
+                if problems.is_empty() {
+                    vec!["→ the configuration failed validation".into()]
+                } else {
+                    problems.iter().map(|p| format!("→ {p}")).collect()
+                }
             }
+            SalatError::ConfigWriteFailed { cause, .. } => vec![format!("→ {cause}")],
             SalatError::PrayerTimesUnavailable => {
                 vec!["→ no cached row covers the requested day".into()]
             }
@@ -244,12 +259,12 @@ impl SalatError {
             SalatError::InvalidCoordinates => &[ErrorAction::Coordinates, ErrorAction::Back],
             SalatError::InvalidMethod => &[ErrorAction::Back],
             SalatError::TimezoneUndetermined => &[ErrorAction::Coordinates, ErrorAction::Back],
-            SalatError::ConfigInvalid => &[
+            SalatError::ConfigInvalid { .. } => &[
                 ErrorAction::Retry,
                 ErrorAction::UseDefaults,
                 ErrorAction::Back,
             ],
-            SalatError::ConfigWriteFailed => &[ErrorAction::Retry, ErrorAction::Back],
+            SalatError::ConfigWriteFailed { .. } => &[ErrorAction::Retry, ErrorAction::Back],
             SalatError::PrayerTimesUnavailable => &[ErrorAction::Retry, ErrorAction::Back],
             SalatError::ApiUnreachable => &[ErrorAction::Retry, ErrorAction::Back],
             SalatError::ApiMalformed => &[ErrorAction::Retry, ErrorAction::Back],
@@ -267,7 +282,9 @@ impl SalatError {
     /// exit `3`, prayer-data errors exit `4`, everything else exits `1`.
     pub fn exit_code(&self) -> ExitCode {
         match self {
-            SalatError::ConfigInvalid | SalatError::ConfigWriteFailed => ExitCode::Config,
+            SalatError::ConfigInvalid { .. } | SalatError::ConfigWriteFailed { .. } => {
+                ExitCode::Config
+            }
             SalatError::PrayerTimesUnavailable
             | SalatError::ApiUnreachable
             | SalatError::ApiMalformed
@@ -307,8 +324,13 @@ mod tests {
             SalatError::InvalidCoordinates,
             SalatError::InvalidMethod,
             SalatError::TimezoneUndetermined,
-            SalatError::ConfigInvalid,
-            SalatError::ConfigWriteFailed,
+            SalatError::ConfigInvalid {
+                problems: vec!["adhan.volume: must be between 0 and 100".into()],
+            },
+            SalatError::ConfigWriteFailed {
+                path: PathBuf::from("/home/u/.config/salat/config.toml"),
+                cause: "permission denied".into(),
+            },
             SalatError::PrayerTimesUnavailable,
             SalatError::ApiUnreachable,
             SalatError::ApiMalformed,
@@ -347,8 +369,19 @@ mod tests {
     #[test]
     fn exit_codes_follow_the_documented_mapping() {
         let cases = [
-            (SalatError::ConfigInvalid, ExitCode::Config),
-            (SalatError::ConfigWriteFailed, ExitCode::Config),
+            (
+                SalatError::ConfigInvalid {
+                    problems: vec!["location.latitude: must be between -90 and 90".into()],
+                },
+                ExitCode::Config,
+            ),
+            (
+                SalatError::ConfigWriteFailed {
+                    path: PathBuf::from("/tmp/config.toml"),
+                    cause: "read-only filesystem".into(),
+                },
+                ExitCode::Config,
+            ),
             (SalatError::PrayerTimesUnavailable, ExitCode::Network),
             (SalatError::ApiUnreachable, ExitCode::Network),
             (SalatError::ApiMalformed, ExitCode::Network),
@@ -364,6 +397,36 @@ mod tests {
         for (err, expected) in cases {
             assert_eq!(err.exit_code(), expected, "{}", err.code());
         }
+    }
+
+    /// E201 carries every problem as a `→ ` line, and E202's Display is
+    /// the §14.6 specimen `salat: error[E202]: cannot write configuration
+    /// to …`.
+    #[test]
+    fn config_errors_render_their_problems_and_path() {
+        let invalid = SalatError::ConfigInvalid {
+            problems: vec![
+                "adhan.volume: must be between 0 and 100".into(),
+                "location.timezone: must be an IANA timezone name".into(),
+            ],
+        };
+        assert_eq!(
+            invalid.details(),
+            vec![
+                "→ adhan.volume: must be between 0 and 100",
+                "→ location.timezone: must be an IANA timezone name",
+            ]
+        );
+
+        let write_failed = SalatError::ConfigWriteFailed {
+            path: PathBuf::from("/home/u/.config/salat/config.toml"),
+            cause: "permission denied".into(),
+        };
+        assert_eq!(
+            write_failed.to_string(),
+            "cannot write configuration to /home/u/.config/salat/config.toml"
+        );
+        assert_eq!(write_failed.details(), vec!["→ permission denied"]);
     }
 
     /// E001 reproduces the design's example exactly (§18.2).

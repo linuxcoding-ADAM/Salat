@@ -88,7 +88,9 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, SalatError> {
     let once = cli.once || !stdout_is_tty;
     match (cli.command, cli.full, once) {
         (Some(Command::Status), _, _) => commands::status::run(),
-        (Some(Command::Config { edit }), _, _) => commands::config::run(edit),
+        (Some(Command::Config { edit }), _, _) => {
+            commands::config::run(edit, cli.config.as_deref())
+        }
         (Some(Command::TestAdhan), _, _) => commands::test_adhan::run(),
         (Some(Command::Daemon { once }), _, _) => commands::daemon::run(once),
         (None, true, _) => commands::full::run(),

@@ -17,10 +17,11 @@ pub mod app;
 pub mod cli;
 pub mod error;
 
+pub mod config;
+
 mod api;
 mod audio;
 mod cache;
-mod config;
 mod domain;
 mod location;
 mod notify;

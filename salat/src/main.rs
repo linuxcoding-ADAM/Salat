@@ -17,8 +17,12 @@ fn main() -> std::process::ExitCode {
         Ok(code) => code.into(),
         Err(err) => {
             // Diagnostics go to stderr — stdout carries a frame or nothing
-            // (§14.6).
+            // (§14.6). Detail lines (the offending key, the path, …)
+            // follow the error line.
             eprintln!("salat: error[{}]: {err}", err.code());
+            for line in err.details() {
+                eprintln!("{line}");
+            }
             err.exit_code().into()
         }
     }

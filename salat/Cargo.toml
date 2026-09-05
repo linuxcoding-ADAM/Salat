@@ -5,15 +5,19 @@ edition = "2024"
 rust-version = "1.97.1"
 license = "MIT OR Apache-2.0"
 description = "Prayer times and Adhan for the Linux terminal"
-repository = "https://github.com/OWNER/salat"
+repository = "https://github.com/linuxcoding-ADAM/salat"
 publish = false
 
 [dependencies]
+chrono-tz = "0.10"
 clap = { version = "4.6.6", features = ["derive", "wrap_help"] }
 color-eyre = "0.6.5"
 directories = "6.0.0"
 is-terminal = "0.4.17"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0.20"
+tokio = { version = "1.53", features = ["sync", "fs"] }
+toml = "1.1"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 
