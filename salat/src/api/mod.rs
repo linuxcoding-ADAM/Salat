@@ -7,7 +7,7 @@
 //! for the layers above. Every request passes §7.4 client-side validation
 //! **before** any bytes go on the wire.
 
-mod map;
+pub mod map;
 
 pub mod dto;
 pub mod params;

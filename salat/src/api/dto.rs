@@ -111,21 +111,30 @@ pub struct HijriDto {
     pub month: u32,
     /// English month name, e.g. `Rabīʿ al-awwal`.
     pub month_name: String,
+    /// Arabic month name, e.g. `رَبيع الأوّل` — the dashboard greeting
+    /// can render it without a lookup table of its own.
+    pub month_name_ar: String,
     pub year: i32,
     /// Islamic occasions the API marks on this day (may be empty).
     pub holidays: Vec<String>,
 }
 
-/// The response `meta`, reduced: timezone, and which method actually
-/// produced these times — the echo that lets a caller notice a silent
-/// remap (§7.4). `offset` is deliberately absent: with a non-zero tune it
-/// arrives as strings, and its information is already baked into the
+/// The response `meta`, reduced: timezone, the method and school that
+/// actually produced these times, and the coordinates the API resolved —
+/// the echo that lets a caller notice a silent remap (§7.4). `school`
+/// stays a string here (the faithful wire echo); `map` turns it into the
+/// domain's `0/1`. `offset` is deliberately absent: with a non-zero tune
+/// it arrives as strings, and its information is already baked into the
 /// timings (§7.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MetaDto {
     pub timezone: String,
     pub method_id: u32,
     pub method_name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    /// `STANDARD` (Shafi) or `HANAFI`, as the API wrote it.
+    pub school: String,
 }
 
 // ---- wire structs ---------------------------------------------------------
@@ -193,11 +202,15 @@ struct RawHijri {
 struct RawHijriMonth {
     number: u32,
     en: String,
+    ar: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawMeta {
     timezone: String,
+    latitude: f64,
+    longitude: f64,
+    school: String,
     method: RawMethodMeta,
     // No `offset` field, on purpose — see `MetaDto`.
 }
@@ -270,6 +283,7 @@ impl TryFrom<&RawDay> for CalendarDayDto {
                 day,
                 month: hijri.month.number,
                 month_name: hijri.month.en.clone(),
+                month_name_ar: hijri.month.ar.clone(),
                 year,
                 holidays: hijri.holidays.clone(),
             },
@@ -277,6 +291,9 @@ impl TryFrom<&RawDay> for CalendarDayDto {
                 timezone: raw.meta.timezone.clone(),
                 method_id: raw.meta.method.id,
                 method_name: raw.meta.method.name.clone(),
+                latitude: raw.meta.latitude,
+                longitude: raw.meta.longitude,
+                school: raw.meta.school.clone(),
             },
         })
     }
@@ -350,13 +367,20 @@ mod tests {
         assert_eq!(last.hijri.year, 1448);
 
         // Meta carries the method echo that defends against silent
-        // remapping (§7.4).
+        // remapping (§7.4), plus the location and school echoes the
+        // domain mapping consumes.
         assert_eq!(first.meta.method_id, 12);
         assert_eq!(
             first.meta.method_name,
             "Union Organization Islamic de France"
         );
         assert_eq!(first.meta.timezone, "Africa/Algiers");
+        assert_eq!(first.meta.school, "STANDARD");
+        assert!((first.meta.latitude - 36.19).abs() < 1e-9);
+        assert!((first.meta.longitude - 5.41).abs() < 1e-9);
+
+        // The Arabic month name rides along for the dashboard greeting.
+        assert_eq!(first.hijri.month_name_ar, "رَبيع الأوّل");
 
         // 2026-09-22 carries a holiday in the fixture.
         assert_eq!(
