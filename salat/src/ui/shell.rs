@@ -14,6 +14,7 @@ use crossterm::event::{Event, KeyEventKind};
 use crate::app::boot::BootState;
 use crate::app::runtime::Runtime;
 use crate::error::SalatError;
+use crate::scheduler::ServiceEvent;
 
 use super::input::{self, Outcome};
 
@@ -248,6 +249,16 @@ impl Shell {
     /// Show or clear the floating overlay.
     pub fn set_overlay(&mut self, overlay: Option<Overlay>) {
         self.overlay = overlay;
+    }
+
+    /// One scheduler publication (§15.2's `svc_rx` arm): a fired or
+    /// missed event. Phase 8's handler is the repaint — an event firing
+    /// changes no screen's own state, but the frame is rebuilt the
+    /// moment it lands. Phase 10 raises the Adhan/reminder overlays
+    /// here; returns whether the frame needs a rebuild.
+    pub fn on_service_event(&mut self, event: ServiceEvent) -> bool {
+        tracing::debug!(target: "salat::ui", ?event, "scheduler event");
+        true
     }
 
     /// Route one event through §15.4's resolution order and apply it.

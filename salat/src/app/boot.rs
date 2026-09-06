@@ -3,10 +3,12 @@
 //! calls instead of [`Runtime::build`] directly.
 //!
 //! Only stages 1–3 (configuration, location, prayer times) can be
-//! fatal. Stages 4–5 (audio, prayer service) belong to later phases
-//! and complete instantly here — the ladder still walks through them,
-//! so the screen's five steps and progress bar are real from Phase 6
-//! on. Quick mode never runs this: it has no loading screen.
+//! fatal. Stage 4 (audio) is Phase 10's and completes instantly; stage
+//! 5 (prayer service) is the §4.3 lock and the scheduler's runner,
+//! started by [`run`] once the ladder succeeds — observer mode is a
+//! success. Quick mode never runs this: it has no loading screen.
+
+use std::sync::Arc;
 
 use crate::app::runtime::Runtime;
 use crate::cli::Cli;
@@ -77,7 +79,12 @@ impl BootState {
 /// the callback and the return value see the failure, because the
 /// LOADING screen needs to draw the red `✕` beat while the command
 /// layer still needs the typed error for the ERROR screen.
-pub fn run<F>(cli: &Cli, mut on_state: F) -> Result<Runtime, SalatError>
+///
+/// After a successful ladder, stage 5's real work runs: the §4.3 lock
+/// and the scheduler's runner. The §11.5 startup catch-up completes
+/// inside that call, so the shell the LOADING screen hands over to
+/// starts from a fully reconciled schedule.
+pub fn run<F>(cli: &Cli, mut on_state: F) -> Result<Arc<Runtime>, SalatError>
 where
     F: FnMut(BootState),
 {
@@ -87,7 +94,10 @@ where
         on_state(state);
     });
     match result {
-        Ok(runtime) => Ok(runtime),
+        Ok(runtime) => {
+            runtime.block_on(runtime.start_scheduler());
+            Ok(runtime)
+        }
         Err(error) => {
             let failing = BootState {
                 error: Some(error.clone()),

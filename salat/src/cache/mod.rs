@@ -275,7 +275,9 @@ pub(crate) fn kind_key(kind: EventKind) -> Option<&'static str> {
         // DayRollover is deliberately absent from the ledger: a re-fired
         // rollover merely refreshes the window, which is idempotent by
         // nature (§11.3), so it needs no cross-restart dedup.
-        EventKind::DayRollover => None,
+        // Snooze re-fires are likewise harmless (§11.7) and, more to the
+        // point, never persist: they are one-shot in-memory events.
+        EventKind::DayRollover | EventKind::AdhanSnooze | EventKind::ReminderSnooze => None,
     }
 }
 

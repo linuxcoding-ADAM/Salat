@@ -21,20 +21,26 @@
 //! later calls [`Runtime::block_on`] for its event loops.
 
 use std::future::Future;
-use std::sync::{Arc, PoisonError, RwLock, RwLockWriteGuard};
+use std::path::PathBuf;
+use std::sync::{Arc, PoisonError, RwLock, RwLockWriteGuard, Weak};
 
+use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Offset as _};
 use chrono_tz::Tz;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, broadcast, watch};
 
 use crate::api::HttpClient;
 use crate::api::params::Params;
 use crate::app::clock::{Clock, SystemClock};
+use crate::app::lock::{self, Acquisition, LockFile, LockGuard};
 use crate::cache::{CacheError, Store, cache_key};
 use crate::cli::Cli;
 use crate::config::{Config, ConfigStore, resolve};
 use crate::domain::{EventKind, Notifiable, PrayerWindow, day_summary, plan_events};
 use crate::error::SalatError;
+use crate::scheduler::{
+    Scheduler, SchedulerDeps, SchedulerHandle, ServiceEvent, TracingSink, WindowSource,
+};
 use crate::service::{PrayerTimeService, ServiceError};
 use crate::status::{Component, ComponentId, Health, NextEvent, SystemStatus};
 
@@ -91,6 +97,48 @@ pub struct Runtime {
     /// run at boot, and §6.7 forbids a false `Ok`.
     network_health: RwLock<(Health, String)>,
     config_health: RwLock<(Health, String)>,
+    /// The §8.1 ledger scope this instance writes under: `"default"` or
+    /// a `--config` scope.
+    scope: String,
+    /// The §4.3 scheduler lock file, resolved per scope in boot.
+    lock_path: PathBuf,
+    /// The scheduler's publication channel (§15.2's `svc_rx`), held for
+    /// the `Runtime`'s whole lifetime so a subscriber can never see it
+    /// closed — the UI subscribes before or after the runner spawns,
+    /// whichever its loop finds convenient.
+    svc_tx: broadcast::Sender<ServiceEvent>,
+    /// The §4.3 arbitration outcome for this process.
+    service_owner: RwLock<ServiceOwner>,
+    /// The held lock and the runner's handle — present iff
+    /// `service_owner` is `Foreground`. Dropping them (with the
+    /// `Runtime`) releases the lock and stops the runner.
+    scheduler: RwLock<Option<OwnedScheduler>>,
+}
+
+/// §4.3's arbitration outcome, mirrored into the Status screen's
+/// `Prayer service` detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceOwner {
+    /// No scheduler has been started — `--once`, the config and status
+    /// commands, the test fixture. The app renders; nothing fires.
+    Standalone,
+    /// This process took the lock and owns the schedule.
+    Foreground,
+    /// Another process holds the lock — observer mode (§4.3): render
+    /// everything, fire nothing. The payload is the holder's record,
+    /// for the observer's Status report.
+    Daemon(LockFile),
+}
+
+/// What [`Runtime::start_scheduler`] won: the exclusive lock and the
+/// runner's handle, kept alive together.
+struct OwnedScheduler {
+    _guard: LockGuard,
+    // `_` only until Phase 10 wires the snooze command through it —
+    // holding the handle is itself the job: it keeps the runner's
+    // command channel alive, and its drop (with the `Runtime`'s) stops
+    // the runner.
+    _handle: SchedulerHandle,
 }
 
 /// The wired parts [`Runtime::build`]'s async boot hands back to the
@@ -108,6 +156,8 @@ struct Boot {
     completions: Vec<Notifiable>,
     today: NaiveDate,
     qibla: Option<f64>,
+    scope: String,
+    lock_path: PathBuf,
 }
 
 impl Runtime {
@@ -119,16 +169,21 @@ impl Runtime {
     ///
     /// The boot vacuum and today's completions are non-fatal (§17.3): a
     /// warning and a degraded detail, never an error.
-    pub fn build(cli: &Cli) -> Result<Self, SalatError> {
+    ///
+    /// Returns an `Arc` because the scheduler's runner holds the runtime
+    /// through a `Weak` (§5.1: no cycle), and the command layer keeps
+    /// the one grip.
+    pub fn build(cli: &Cli) -> Result<Arc<Self>, SalatError> {
         Self::build_with(cli, |_| ())
     }
 
     /// [`Runtime::build`] with the §15.7 stage reporting the `--full`
     /// LOADING screen renders: a [`BootState`] per stage as it *starts*.
-    /// Stages 4–5 (audio, prayer service) belong to Phases 10 and 8 —
-    /// they report and complete instantly here, so the ladder's shape
-    /// and progress fraction are real from Phase 6 on.
-    pub fn build_with<F>(cli: &Cli, mut on_state: F) -> Result<Self, SalatError>
+    /// Stages 4–5 report and complete instantly here — audio is Phase
+    /// 10's, and the scheduler (stage 5's real work) is started *after*
+    /// boot by the command layer ([`boot::run`], quick mode's live loop)
+    /// via [`Runtime::start_scheduler`], never in `--once`.
+    pub fn build_with<F>(cli: &Cli, mut on_state: F) -> Result<Arc<Self>, SalatError>
     where
         F: FnMut(crate::app::boot::BootState),
     {
@@ -245,6 +300,13 @@ impl Runtime {
                 location: Some(label),
             });
 
+            // The §4.3 scope and lock path outlive the ladder: the
+            // scheduler's arbitration (stage 5's real work, started by
+            // the command layer after boot) and the ledger's scope key
+            // both need them.
+            let scope = paths.scope;
+            let lock_path = paths.lock;
+
             Ok::<_, SalatError>(Boot {
                 clock,
                 config_store,
@@ -257,9 +319,11 @@ impl Runtime {
                 completions,
                 today,
                 qibla,
+                scope,
+                lock_path,
             })
         })?;
-        Ok(Self {
+        Ok(Arc::new(Self {
             rt,
             clock: boot.clock,
             config_store: boot.config_store,
@@ -275,7 +339,12 @@ impl Runtime {
             svc_health: RwLock::new((Health::Ok, "RUNNING".to_owned())),
             network_health: RwLock::new((Health::Unknown, String::new())),
             config_health: RwLock::new((Health::Ok, "OK".to_owned())),
-        })
+            scope: boot.scope,
+            lock_path: boot.lock_path,
+            svc_tx: broadcast::channel(64).0,
+            service_owner: RwLock::new(ServiceOwner::Standalone),
+            scheduler: RwLock::new(None),
+        }))
     }
 
     /// The time source (§6.6) — the one callers may read "now" from.
@@ -318,6 +387,72 @@ impl Runtime {
     /// command layer's event loops enter through.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         self.rt.block_on(future)
+    }
+
+    /// Subscribe to the scheduler's publications (§15.2's `svc_rx` arm).
+    /// The runtime holds the sender for its whole lifetime, so the
+    /// receiver never observes a closed channel — only lag, on a
+    /// listener slower than the events.
+    pub fn subscribe_service(&self) -> broadcast::Receiver<ServiceEvent> {
+        self.svc_tx.subscribe()
+    }
+
+    /// Take the §4.3 scheduler lock and start the runner (§15.7 stage
+    /// 5's real work). Winning the lock makes this process the
+    /// schedule's owner — the runner fires the plan's events exactly
+    /// once each; losing it is observer mode: everything renders,
+    /// nothing fires, and the Status screen reports `RUNNING (daemon)`.
+    /// A lock file that cannot even be opened is §18.3's honest
+    /// degradation: a warning, no scheduler, the app keeps telling the
+    /// time.
+    ///
+    /// The §11.5 startup catch-up completes inside this call — before
+    /// any UI subscription can exist — so a catch-up fire can never be
+    /// mistaken for a live one. Called once after boot, on the
+    /// runtime's own `block_on`; a second call is a no-op.
+    pub async fn start_scheduler(self: &Arc<Self>) {
+        if !matches!(recover(&self.service_owner), ServiceOwner::Standalone) {
+            return;
+        }
+        let now = self.clock.now_utc();
+        match lock::try_acquire(&self.lock_path, now) {
+            Ok(Acquisition::Held(guard)) => {
+                let handle = Scheduler::spawn(SchedulerDeps {
+                    clock: self.clock(),
+                    store: Arc::clone(&self.cache),
+                    scope: self.scope.clone(),
+                    sink: Arc::new(TracingSink),
+                    windows: Arc::new(RuntimeWindowSource {
+                        runtime: Arc::downgrade(self),
+                    }),
+                    config: self.subscribe_config(),
+                    events: self.svc_tx.clone(),
+                })
+                .await;
+                *recover_mut(&self.scheduler) = Some(OwnedScheduler {
+                    _guard: guard,
+                    _handle: handle,
+                });
+                *recover_mut(&self.service_owner) = ServiceOwner::Foreground;
+                tracing::info!(
+                    target: "salat::app",
+                    "scheduler started — this process owns the schedule"
+                );
+            }
+            Ok(Acquisition::Occupied(holder)) => {
+                *recover_mut(&self.service_owner) = ServiceOwner::Daemon(holder);
+                tracing::info!(
+                    target: "salat::app",
+                    pid = holder.pid,
+                    "scheduler lock held elsewhere — observer mode, nothing fires here"
+                );
+            }
+            Err(error) => tracing::warn!(
+                target: "salat::app",
+                %error,
+                "the scheduler lock could not be taken — running without scheduling"
+            ),
+        }
     }
 
     fn tz(&self) -> Tz {
@@ -505,6 +640,17 @@ impl Runtime {
         }
     }
 
+    /// The PrayerService detail (§4.3, §6.7): the refresh cycle's base
+    /// vocabulary — `RUNNING`, `CACHED` — with the ownership suffix
+    /// once the schedule is arbitrated: `RUNNING (foreground)` for the
+    /// owner, `RUNNING (daemon)` for an observer.
+    fn prayer_service_detail(&self, base: &str) -> String {
+        match (recover(&self.service_owner), base) {
+            (ServiceOwner::Foreground, "RUNNING") => "RUNNING (foreground)".to_owned(),
+            (ServiceOwner::Daemon(_), "RUNNING") => "RUNNING (daemon)".to_owned(),
+            _ => base.to_owned(),
+        }
+    }
     /// A fresh [`SystemStatus`] (§6.7), rebuilt on every call so the
     /// counters and next event never go stale between refreshes — it is
     /// cheap: a summary and a plan over ten instants, from cached
@@ -527,7 +673,9 @@ impl Runtime {
         let components = ComponentId::ALL
             .map(|id| {
                 let (health, detail) = match id {
-                    ComponentId::PrayerService => (svc_health, svc_detail.clone()),
+                    ComponentId::PrayerService => {
+                        (svc_health, self.prayer_service_detail(&svc_detail))
+                    }
                     ComponentId::PrayerCalculation => (Health::Ok, "OK".to_owned()),
                     ComponentId::Location => (Health::Ok, config.location.label.to_uppercase()),
                     ComponentId::Timezone => (Health::Ok, utc_offset_label(now)),
@@ -559,6 +707,35 @@ impl Runtime {
             // has nothing to show yet.
             recent: Vec::new(),
         })
+    }
+}
+
+/// The scheduler's [`WindowSource`] into this runtime — a `Weak`
+/// handle, so the runner task never keeps the `Runtime` (and its tokio
+/// runtime) alive: when the runtime is gone, `window` returns `None`
+/// and the runner exits (§5.1's no-cycle rule).
+struct RuntimeWindowSource {
+    runtime: Weak<Runtime>,
+}
+
+#[async_trait]
+impl WindowSource for RuntimeWindowSource {
+    async fn window(&self) -> Option<Arc<PrayerWindow>> {
+        Some(self.runtime.upgrade()?.window())
+    }
+
+    async fn refresh(&self) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.refresh().await;
+        }
+    }
+
+    async fn rollover(&self) {
+        // §11.6's refetch-and-roll is the runtime's own refresh: the
+        // served day rolls and completions reset for the new one.
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.refresh().await;
+        }
     }
 }
 
@@ -681,6 +858,15 @@ pub(crate) mod testing {
             svc_health: RwLock::new((Health::Ok, "RUNNING".to_owned())),
             network_health: RwLock::new((Health::Unknown, String::new())),
             config_health: RwLock::new((Health::Ok, "OK".to_owned())),
+            // The fixture never starts a scheduler, so the lock path is
+            // never taken; `start_scheduler`-oriented tests point it at
+            // a tempdir first (an empty path fails the open, which is
+            // exactly the degraded path such a test can assert).
+            scope: "default".to_owned(),
+            lock_path: PathBuf::new(),
+            svc_tx: broadcast::channel(64).0,
+            service_owner: RwLock::new(ServiceOwner::Standalone),
+            scheduler: RwLock::new(None),
         };
         Fixture {
             runtime,
@@ -1067,5 +1253,107 @@ mod tests {
         assert!(fixture.config_path().exists());
         assert_eq!(fixture.runtime.window().today.date, dt::TODAY);
         assert_eq!(fixture.runtime.completions(), Vec::new());
+    }
+
+    /// A pinned instant for the lock tests — like every cache-layer
+    /// write, the holder record's stamp is passed in, never read from
+    /// the ambient clock.
+    fn lock_now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-09-06T18:00:00Z")
+            .expect("the literal parses")
+            .with_timezone(&chrono::Utc)
+    }
+
+    /// §4.3: `start_scheduler` on an uncontended lock makes this
+    /// process the schedule's owner, and the Status screen's
+    /// `Prayer service` says `RUNNING (foreground)`.
+    #[test]
+    fn start_scheduler_on_a_free_lock_owns_the_schedule() {
+        let mut fixture = testing::snapshot_runtime();
+        let lock = tempfile::tempdir()
+            .expect("a tempdir for the lock")
+            .path()
+            .join("scheduler.lock");
+        fixture.runtime.lock_path = lock;
+        let runtime = Arc::new(fixture.runtime);
+
+        runtime.block_on(runtime.start_scheduler());
+
+        assert_eq!(
+            recover(&runtime.service_owner),
+            ServiceOwner::Foreground,
+            "the uncontended lock is taken and the runner spawned"
+        );
+        assert_eq!(
+            runtime
+                .status()
+                .component(ComponentId::PrayerService)
+                .map(|component| component.detail.clone()),
+            Some("RUNNING (foreground)".to_owned())
+        );
+    }
+
+    /// §4.3: a lock another process holds lands this one in observer
+    /// mode — `RUNNING (daemon)`, no runner spawned, the holder's
+    /// record kept for the Status report.
+    #[test]
+    fn start_scheduler_on_a_held_lock_is_observer_mode() {
+        let dir = tempfile::tempdir().expect("a tempdir for the lock");
+        let lock = dir.path().join("scheduler.lock");
+        let Acquisition::Held(_held) =
+            lock::try_acquire(&lock, lock_now()).expect("the uncontended acquire")
+        else {
+            panic!("the pre-acquired lock is held");
+        };
+
+        let mut fixture = testing::snapshot_runtime();
+        fixture.runtime.lock_path = lock;
+        let runtime = Arc::new(fixture.runtime);
+
+        runtime.block_on(runtime.start_scheduler());
+
+        assert_eq!(
+            recover(&runtime.service_owner),
+            ServiceOwner::Daemon(LockFile {
+                pid: std::process::id(),
+                started_at: Some(lock_now()),
+            }),
+            "the observer reads the holder's record"
+        );
+        let spawned = runtime
+            .scheduler
+            .read()
+            .map(|slot| slot.is_some())
+            .unwrap_or(false);
+        assert!(!spawned, "no runner spawned");
+        assert_eq!(
+            runtime
+                .status()
+                .component(ComponentId::PrayerService)
+                .map(|component| component.detail.clone()),
+            Some("RUNNING (daemon)".to_owned())
+        );
+    }
+
+    /// §18.3: a lock that cannot even be opened degrades honestly — a
+    /// warning, no scheduler, the app keeps telling the time with the
+    /// base vocabulary.
+    #[test]
+    fn an_unopenable_lock_runs_without_scheduling() {
+        let fixture = testing::snapshot_runtime();
+        // The fixture's empty path cannot be opened — exactly the
+        // degraded case.
+        let runtime = Arc::new(fixture.runtime);
+
+        runtime.block_on(runtime.start_scheduler());
+
+        assert_eq!(recover(&runtime.service_owner), ServiceOwner::Standalone);
+        assert_eq!(
+            runtime
+                .status()
+                .component(ComponentId::PrayerService)
+                .map(|component| component.detail.clone()),
+            Some("RUNNING".to_owned())
+        );
     }
 }

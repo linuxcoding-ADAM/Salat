@@ -7,11 +7,11 @@
 //! the second Maghrib begins" from a flaky integration test into a
 //! two-line unit test that advances [`MockClock`].
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
-
 /// The application's time source (§6.6).
 pub trait Clock: Send + Sync {
     /// The current instant, in UTC.
@@ -23,12 +23,26 @@ pub trait Clock: Send + Sync {
     fn now_in(&self, tz: Tz) -> DateTime<Tz> {
         self.now_utc().with_timezone(&tz)
     }
+
+    /// Elapsed time on a monotonic source (§11.3). The baseline is
+    /// arbitrary but fixed per process; what matters is that the value
+    /// never steps with the wall clock — `CLOCK_MONOTONIC` does not
+    /// advance while the machine is suspended, which is exactly what
+    /// makes `|Δwall − Δmono|` the suspend/NTP-step detector.
+    fn now_monotonic(&self) -> Duration;
 }
 
 /// The real clock. The one place in the codebase where the wall clock
 /// is read legally — see the `#[allow]` below and `clippy.toml`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemClock;
+
+/// The `Instant` the first `SystemClock` reading was taken from — the
+/// baseline `now_monotonic` measures against.
+fn process_start() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
 
 impl Clock for SystemClock {
     // `Utc::now` is disallowed everywhere else by clippy.toml; this is
@@ -37,14 +51,24 @@ impl Clock for SystemClock {
     fn now_utc(&self) -> DateTime<Utc> {
         Utc::now()
     }
+
+    fn now_monotonic(&self) -> Duration {
+        Instant::now() - process_start()
+    }
 }
 
 /// A settable, advanceable clock for tests (§6.6, §20.1). Thread-safe:
 /// tests share one clock across the scheduler and its assertions, and
 /// no `sleep` is ever needed — timing tests *advance* the clock.
+///
+/// The wall reading and the monotonic counter are independent (§11.8):
+/// `advance` moves both — the honest passage of time — while `set` and
+/// `advance_wall_only` move the wall alone, simulating an NTP step or a
+/// suspend/resume (during which `CLOCK_MONOTONIC` stands still).
 #[derive(Debug)]
 pub struct MockClock {
     now: Mutex<DateTime<Utc>>,
+    mono: Mutex<Duration>,
 }
 
 impl MockClock {
@@ -52,17 +76,32 @@ impl MockClock {
     pub fn at(utc: DateTime<Utc>) -> Self {
         Self {
             now: Mutex::new(utc),
+            mono: Mutex::new(Duration::ZERO),
         }
     }
 
-    /// Jump to an instant.
+    /// Jump to an instant — the wall reading only. A set is a clock
+    /// step by definition, so the monotonic counter is left untouched.
     pub fn set(&self, utc: DateTime<Utc>) {
         *self.lock() = utc;
     }
 
     /// Advance (or, with a negative duration, step back) by an exact
-    /// amount — the test-side counterpart of waiting.
+    /// amount — the test-side counterpart of waiting. Forward motion is
+    /// honest passage and moves the monotonic counter with it; a
+    /// negative duration is a wall-clock step back and leaves the
+    /// counter alone.
     pub fn advance(&self, delta: chrono::Duration) {
+        *self.lock() += delta;
+        if delta > chrono::Duration::zero() {
+            *self.mono.lock().unwrap_or_else(PoisonError::into_inner) +=
+                delta.to_std().unwrap_or(Duration::ZERO);
+        }
+    }
+
+    /// Move the wall reading while the monotonic counter stands still —
+    /// a suspend/resume or an NTP step, the §11.3 jump cases.
+    pub fn advance_wall_only(&self, delta: chrono::Duration) {
         *self.lock() += delta;
     }
 
@@ -77,6 +116,10 @@ impl MockClock {
 impl Clock for MockClock {
     fn now_utc(&self) -> DateTime<Utc> {
         *self.lock()
+    }
+
+    fn now_monotonic(&self) -> Duration {
+        *self.mono.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -140,5 +183,66 @@ mod tests {
         );
         let algiers = clock.now_in(chrono_tz::Africa::Algiers);
         assert_eq!(algiers.offset().fix().local_minus_utc(), 3600);
+    }
+
+    /// §11.3/§11.8: the two readings are independent — `set` and
+    /// `advance_wall_only` step the wall without moving the monotonic
+    /// counter (suspend/NTP), while `advance` moves both (honest time).
+    #[test]
+    fn mock_clock_monotonic_tracks_passage_not_jumps() {
+        let start = snapshot_utc();
+        let clock = MockClock::at(start);
+        assert_eq!(clock.now_monotonic(), std::time::Duration::ZERO);
+
+        clock.advance(chrono::Duration::minutes(90));
+        assert_eq!(
+            clock.now_monotonic(),
+            std::time::Duration::from_secs(90 * 60),
+            "honest passage moves the counter"
+        );
+
+        // A six-hour wall-only jump (suspend/resume): the wall races
+        // ahead, the counter does not — |Δwall − Δmono| = 6 h.
+        clock.advance_wall_only(chrono::Duration::hours(6));
+        assert_eq!(
+            clock.now_monotonic(),
+            std::time::Duration::from_secs(90 * 60),
+            "a wall-only jump leaves the counter still"
+        );
+        assert_eq!(
+            clock.now_utc(),
+            start + chrono::Duration::minutes(90) + chrono::Duration::hours(6)
+        );
+
+        // A set is a step: the counter is untouched.
+        clock.set(start);
+        assert_eq!(
+            clock.now_monotonic(),
+            std::time::Duration::from_secs(90 * 60)
+        );
+
+        // Stepping back is a wall jump, not backwards passage.
+        clock.advance(chrono::Duration::minutes(-90));
+        assert_eq!(
+            clock.now_monotonic(),
+            std::time::Duration::from_secs(90 * 60)
+        );
+    }
+
+    /// The real monotonic reading never runs backwards and stays small
+    /// (it is measured from a per-process baseline, not the epoch).
+    #[test]
+    fn system_clock_monotonic_is_monotonic() {
+        let clock = SystemClock;
+        let first = clock.now_monotonic();
+        let second = clock.now_monotonic();
+        assert!(
+            second >= first,
+            "monotonic ran backwards: {first:?} → {second:?}"
+        );
+        assert!(
+            first < std::time::Duration::from_secs(24 * 60 * 60),
+            "the baseline is per-process, not the epoch: {first:?}"
+        );
     }
 }

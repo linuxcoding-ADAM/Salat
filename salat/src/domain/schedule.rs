@@ -25,6 +25,21 @@ pub enum EventKind {
     /// The day boundary at local midnight: refetch, replan, clear
     /// completions (§11.3).
     DayRollover,
+    /// A user-snoozed Adhan, re-fired once after the snooze window
+    /// (§11.7). In-memory and one-shot: never planned, never ledgered.
+    AdhanSnooze,
+    /// A user-snoozed mosque reminder, same rules as
+    /// [`EventKind::AdhanSnooze`] (§11.7).
+    ReminderSnooze,
+}
+
+impl EventKind {
+    /// The snooze durations are the runner's constants (§A10); the kind
+    /// only needs to answer whether it is a one-shot snooze event —
+    /// those bypass the fired-events ledger (§11.7).
+    pub fn is_snooze(self) -> bool {
+        matches!(self, EventKind::AdhanSnooze | EventKind::ReminderSnooze)
+    }
 }
 
 /// One thing the scheduler must fire, once (§11.3).
@@ -119,7 +134,7 @@ pub fn plan_events(window: &PrayerWindow, cfg: &Config, now: DateTime<Tz>) -> Ve
 /// exists, `earliest()` resolving ambiguity. The degenerate "no hour of
 /// the night exists" case returns `None` and the caller plans no
 /// rollover — better an honest gap than a fabricated instant.
-fn midnight_in(tz: Tz, date: NaiveDate) -> Option<DateTime<Tz>> {
+pub fn midnight_in(tz: Tz, date: NaiveDate) -> Option<DateTime<Tz>> {
     for hour in 0..4 {
         let Some(naive) = date.and_hms_opt(hour, 0, 0) else {
             continue;

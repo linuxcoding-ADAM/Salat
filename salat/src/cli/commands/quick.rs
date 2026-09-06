@@ -573,16 +573,21 @@ pub fn run_live(cli: &Cli) -> Result<ExitCode, SalatError> {
     )
     .map_err(term_io)?;
 
+    // The live view schedules (§4.3): take the lock, run the runner —
+    // losing the lock is observer mode, a success. `--once` never
+    // starts a scheduler; neither does the floor's one-line summary,
+    // which exits immediately after rendering it.
+    runtime.block_on(runtime.start_scheduler());
     runtime.block_on(run_loop(&runtime, &mut terminal, &theme))?;
     // The last frame stays in scrollback (§15.3): no clear, no
     // alternate screen to leave.
     Ok(ExitCode::Ok)
 }
 
-/// §15.2's loop with Phase 5's arms: events, the 250 ms tick (with the
-/// rollover check), the configuration watch, and the signals channel.
-/// `svc_rx` arrives with the scheduler's phase. Drawing is on demand,
-/// capped at 20 Hz.
+/// §15.2's loop with Phase 8's arms: events, the 250 ms tick (with the
+/// rollover check), the configuration watch, the signals channel, and
+/// the scheduler's `svc_rx` — a fired or missed event is a reason to
+/// repaint. Drawing is on demand, capped at 20 Hz.
 async fn run_loop(
     runtime: &Runtime,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -591,6 +596,7 @@ async fn run_loop(
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let mut cfg_rx = runtime.subscribe_config();
+    let mut svc_rx = runtime.subscribe_service();
     let mut signal_rx = signals::forward();
 
     let mut model = build_model(runtime);
@@ -641,6 +647,17 @@ async fn run_loop(
                 // publication wakes the config arm above.
                 Some(_) => runtime.reload_config().await,
                 None => {}
+            },
+            // A fired or missed event (§15.2's svc_rx): repaint — the
+            // countdown and next-event derive from the model, and the
+            // overlays quick mode does not have are Phase 10's.
+            service = svc_rx.recv() => match service {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    model = build_model(runtime);
+                    dirty = true;
+                }
+                // Never closed: the runtime holds the sender.
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
             },
         }
 

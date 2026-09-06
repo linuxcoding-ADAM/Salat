@@ -20,7 +20,7 @@ pub use day::{
     DayMeta, HijriDate, PrayerDay, PrayerInstant, PrayerWindow, next_prayer, previous_prayer,
 };
 pub use prayer::{Notifiable, Prayer};
-pub use schedule::{EventKind, ScheduledEvent, plan_events};
+pub use schedule::{EventKind, ScheduledEvent, midnight_in, plan_events};
 pub use state::{ADHAN_DISPLAY_SECS, PrayerState, state_of};
 pub use summary::{DaySummary, day_summary};
 

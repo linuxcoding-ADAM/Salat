@@ -13,6 +13,7 @@
 //! [`crate::ui::render`] at most every 50 ms.
 
 use std::io::Stdout;
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -24,6 +25,7 @@ use futures_util::StreamExt as _;
 use ratatui::Terminal;
 use ratatui::prelude::CrosstermBackend;
 use ratatui::style::Style;
+use tokio::sync::broadcast;
 
 use crate::app::boot::{self, BootState};
 use crate::app::clock::{Clock, SystemClock};
@@ -50,23 +52,21 @@ const BOOT_POLL: Duration = Duration::from_millis(50);
 /// The red-`✕` beat §16.11 item 5 holds before the ERROR screen.
 const ERROR_BEAT: Duration = Duration::from_millis(400);
 
-/// What the boot phase ended with. The runtime is boxed: it is by far
-/// the largest variant, and the enum crosses the boot thread's channel
-/// one message at a time.
+/// What the boot phase ended with.
 enum BootOutcome {
-    /// The `Runtime`, wired and warm.
-    Runtime(Box<Runtime>),
+    /// The `Runtime`, wired and warm — behind the `Arc` the scheduler's
+    /// runner will hold a `Weak` to (§5.1).
+    Runtime(Arc<Runtime>),
     /// Ctrl-C during boot — a clean, quiet exit.
     UserAbort,
     /// A fatal boot stage; the ERROR screen takes over.
     Failed(SalatError),
 }
 
-/// One message from the boot thread. `Done` boxes its payload for the
-/// same reason as [`BootOutcome::Runtime`].
+/// One message from the boot thread.
 enum BootMsg {
     State(BootState),
-    Done(Box<Result<Runtime, SalatError>>),
+    Done(Box<Result<Arc<Runtime>, SalatError>>),
 }
 
 /// Run the full TUI (§15.3: alternate screen, raw mode, restore on
@@ -150,7 +150,7 @@ fn boot_phase(
         if let Some(result) = done {
             let _ = boot_thread.join();
             return Ok(match *result {
-                Ok(runtime) => BootOutcome::Runtime(Box::new(runtime)),
+                Ok(runtime) => BootOutcome::Runtime(runtime),
                 Err(error) => {
                     // The error state was the last thing drawn; hold
                     // the red `✕` beat before the ERROR screen.
@@ -255,10 +255,11 @@ fn is_ctrl_c(event: Event) -> bool {
         && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
 }
 
-/// §15.2's loop with Phase 6's arms: events, the 250 ms tick (with the
-/// rollover check), the configuration watch, and the signals channel.
-/// The scheduler's `svc_rx` arrives with Phase 8. Drawing is on
-/// demand, capped at 20 Hz.
+/// §15.2's loop with Phase 8's arms: events, the 250 ms tick (with the
+/// rollover check), the configuration watch, the signals channel, and
+/// the scheduler's `svc_rx` — a fired or missed event is a reason to
+/// repaint, never an overlay trigger (overlays are Phase 10's reaction
+/// to the state machine). Drawing is on demand, capped at 20 Hz.
 async fn run_loop(
     runtime: &Runtime,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -266,6 +267,7 @@ async fn run_loop(
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let mut cfg_rx = runtime.subscribe_config();
+    let mut svc_rx = runtime.subscribe_service();
     let mut signal_rx = signals::forward();
 
     let mut shell = Shell::new();
@@ -326,6 +328,22 @@ async fn run_loop(
                 // publication wakes the config arm above.
                 Some(_) => runtime.reload_config().await,
                 None => {}
+            },
+            service = svc_rx.recv() => match service {
+                Ok(event) => {
+                    if shell.on_service_event(event) {
+                        model = build_model(runtime);
+                        dirty = true;
+                    }
+                }
+                // A slow draw skipped publications — the rebuild catches
+                // the frame up to the newest one.
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    model = build_model(runtime);
+                    dirty = true;
+                }
+                // Never closed: the runtime holds the sender.
+                Err(broadcast::error::RecvError::Closed) => {}
             },
         }
 
