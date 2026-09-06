@@ -15,7 +15,7 @@ With no `--config` flag, salat reads:
 | Resource | Path | Mode |
 |---|---|---|
 | Configuration | `$XDG_CONFIG_HOME/salat/config.toml` | `0600` |
-| Database | `$XDG_DATA_HOME/salat/salat.db` | — |
+| Database | `$XDG_DATA_HOME/salat/salat.db` | `0600` |
 | Scheduler lock | `$XDG_RUNTIME_DIR/salat/scheduler.lock` | — |
 
 `$XDG_CONFIG_HOME` defaults to `~/.config`, `$XDG_DATA_HOME` to
@@ -284,3 +284,49 @@ salat: error[E201]: configuration invalid
   restart, no polling. A `SIGHUP` re-reads the file.
 - The file is written at mode `0600`: it records a physical location,
   which is personal data even though it is not a secret.
+
+## 6. The database and the offline cache
+
+`salat.db` (and its `salat-<scope>.db` sibling under `--config`) is a
+SQLite database holding five tables:
+
+| Table | What it holds | Why |
+|---|---|---|
+| `prayer_days` | whole fetched months of prayer times | the offline cache — instant start, full offline correctness for fetched dates |
+| `fired_events` | which notifications/Adhan already fired | a restart never repeats an audible event |
+| `event_log` | the Status screen's "recent events" panel | the user can see what the app did |
+| `prayer_completions` | the prayers you marked `[c]` completed | the state survives a restart |
+| `qibla` | the Qibla bearing per location | fetched once, never changes |
+
+**Purpose of the cache.** Prayer times are an astronomical computation:
+AlAdhan's answer for a given `(location, calculation, date)` never
+changes. So a cached day is never stale and never revalidated on the
+hot path — once a month is fetched, serving it costs **zero network**.
+A fetch happens only for a month the cache does not already hold
+completely.
+
+**Limits and lifecycle.**
+
+- Rows never expire and are never rewritten; the cache is bounded
+  instead. Once per boot, a vacuum deletes rows older than 60 days
+  (each table by its own date column) and rows of a *superseded*
+  configuration that have not been read for 7 days.
+- Invalidating the cache is implicit: the rows are keyed by the
+  canonical cache key (coordinates at four decimals, method, school,
+  latitude-adjustment rule, midnight mode, timezone, tune vector), so
+  a configuration change simply reads a different key's rows. Old
+  rows linger until the vacuum claims them.
+- Offline with nothing cached for the requested day is an honest
+  `E301` (prayer times unavailable) — a guess is never substituted.
+- A corrupt database is never fatal: at boot the damaged file is
+  renamed aside as `salat.db.corrupt-<timestamp>` (kept as evidence),
+  a fresh one is created in its place, and the months are re-fetched.
+- The database file and its WAL/SHM sidecars are mode `0600`: like the
+  configuration, they record a physical location.
+- Schema migrations run automatically at open; you never run a
+  migration command. `_sqlx_migrations` in the schema is migration
+  bookkeeping, not application data.
+
+Deleting the database file is always safe — everything in it can be
+re-fetched or re-derived, apart from the completion marks and the
+event history, which are lost.

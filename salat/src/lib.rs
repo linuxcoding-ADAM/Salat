@@ -17,22 +17,25 @@ pub mod app;
 pub mod cli;
 pub mod error;
 
+pub mod cache;
 pub mod config;
 
 pub mod api;
 mod audio;
-mod cache;
 pub mod domain;
 mod location;
 mod notify;
-mod scheduler;
+pub mod scheduler;
+pub mod service;
 mod status;
 mod ui;
 
 pub use app::clock::{Clock, MockClock, SystemClock};
+pub use cache::{CacheError, LoggedEvent, Store, cache_key};
 pub use domain::{
     ADHAN_DISPLAY_SECS, Countdown, DayMeta, DaySummary, EventKind, HijriDate, Notifiable, Prayer,
     PrayerDay, PrayerInstant, PrayerState, PrayerWindow, ScheduledEvent, day_summary, next_prayer,
     plan_events, previous_prayer, progress, state_of,
 };
 pub use error::{ErrorAction, ExitCode, SalatError};
+pub use service::{PrayerTimeService, ServiceError};
