@@ -13,4 +13,5 @@ pub mod kbd_hint;
 pub mod panel;
 pub mod prayer_table;
 pub mod status_dot;
+pub mod timeline;
 pub mod too_small;

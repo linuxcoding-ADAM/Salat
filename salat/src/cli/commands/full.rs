@@ -282,7 +282,17 @@ async fn run_loop(
                         terminal.clear().map_err(term_io)?;
                         dirty = true;
                     }
-                    Outcome::Changed => dirty = true,
+                    // The shell's state changed — the cursor moved or a
+                    // completion landed in the store. Rebuild the model
+                    // now rather than waiting for the next tick: the
+                    // draw below could otherwise paint the stale one.
+                    Outcome::Changed => {
+                        let (width, height) =
+                            crossterm::terminal::size().map_err(term_io)?;
+                        model = build_model(runtime);
+                        model.breakpoint = Breakpoint::of_size(width, height);
+                        dirty = true;
+                    }
                     // A resize needs no handler (§15.2 decision 3) —
                     // layout derives from the frame area each draw, so
                     // only the redraw matters.

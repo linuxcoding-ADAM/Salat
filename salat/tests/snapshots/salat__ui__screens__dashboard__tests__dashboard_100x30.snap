@@ -1,0 +1,34 @@
+---
+source: salat/src/ui/screens/dashboard.rs
+expression: "text(&rendered(width, height))"
+---
+╭─ NEXT PRAYER ─────────────────────────────╮╭─ TODAY'S PRAYERS ───────────────────────────────────╮
+│MAGHRIB                           SCHEDULED││   PRAYER   TIME   STATUS                       NOTIF│
+│● NEXT PRAYER                         19:21││─────────────────────────────────────────────────────│
+│      ███  █   ▄  █ █ ▀▀█  ▄  ▀▀█ ▀▀▀      ││   Fajr     05:09  ✓ passed                      -15m│
+│      █ █  █      █▀█ ▄▄█      ▀▀   █      ││   Dhuhr    12:47  ✓ passed                      -10m│
+│      ███ ▄█▄  ▀    █ █▄▄  ▀  ▄▄█   █      ││   Asr      16:23  ✓ passed                      -15m│
+│                 REMAINING                 ││▎▶ Maghrib  19:21  ● next · in 01:42:37           -5m│
+│     ██████████████░░░░░░░░░░░░░░░░░░      ││   Isha     20:47  ○ upcoming                    -15m│
+│Asr 16:23           42%       Maghrib 19:21││─────────────────────────────────────────────────────│
+│───────────────────────────────────────────││Hijri: 23 Rabīʿ al-awwal 1448 AH · Qibla: 106.8°     │
+│Notify before              5 min · at 19:16││                                                     │
+│Mosque reminder               +15 min after││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+│                                           ││                                                     │
+╰───────────────────────────────────────────╯╰─────────────────────────────────────────────────────╯
+● service │ ○ notifications │ ○ adhan │ ○ audio

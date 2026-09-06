@@ -79,6 +79,11 @@ pub struct Runtime {
     completions: RwLock<Vec<Notifiable>>,
     /// The window's "today" — the rollover check compares against it.
     day: RwLock<NaiveDate>,
+    /// The Qibla bearing (§17.1) — resolved once per location at boot
+    /// and on every refresh (which is a no-op read on the warm path).
+    /// `None` means unresolved, never `0`: the dashboard then simply
+    /// omits the value instead of pointing at a wrong Mecca.
+    qibla: RwLock<Option<f64>>,
     /// Cached `(health, detail)` for the components whose story changes
     /// only on refresh/config events, so `status()` stays cheap.
     svc_health: RwLock<(Health, String)>,
@@ -102,6 +107,7 @@ struct Boot {
     window: Arc<PrayerWindow>,
     completions: Vec<Notifiable>,
     today: NaiveDate,
+    qibla: Option<f64>,
 }
 
 impl Runtime {
@@ -212,6 +218,16 @@ impl Runtime {
                 }
             };
 
+            // The Qibla bearing rides the same stage (§17.1): one
+            // cached read per launch, one request per location
+            // lifetime. Cosmetic — a failure warns and the dashboard
+            // omits the value; it must not fail a boot that has a
+            // perfectly good window.
+            let qibla = service.qibla().await.ok();
+            if qibla.is_none() {
+                tracing::warn!(target: "salat::app", "qibla unresolved for this location");
+            }
+
             // Step 4 (index 3): Initializing audio — never fatal, and
             // Phase 10's concern; reported and completed instantly.
             on_state(crate::app::boot::BootState {
@@ -240,6 +256,7 @@ impl Runtime {
                 window,
                 completions,
                 today,
+                qibla,
             })
         })?;
         Ok(Self {
@@ -254,6 +271,7 @@ impl Runtime {
             window: RwLock::new(boot.window),
             completions: RwLock::new(boot.completions),
             day: RwLock::new(boot.today),
+            qibla: RwLock::new(boot.qibla),
             svc_health: RwLock::new((Health::Ok, "RUNNING".to_owned())),
             network_health: RwLock::new((Health::Unknown, String::new())),
             config_health: RwLock::new((Health::Ok, "OK".to_owned())),
@@ -278,6 +296,12 @@ impl Runtime {
     /// Today's completed prayers (A3).
     pub fn completions(&self) -> Vec<Notifiable> {
         recover(&self.completions)
+    }
+
+    /// The Qibla bearing in degrees from true North (§17.1) — `None`
+    /// until a launch has resolved it for this location.
+    pub fn qibla(&self) -> Option<f64> {
+        recover(&self.qibla)
     }
 
     /// A second subscription to the configuration watch — the command
@@ -331,6 +355,10 @@ impl Runtime {
                 }
                 *recover_mut(&self.day) = today;
                 *recover_mut(&self.window) = refreshed.window;
+                // The refresh is also the Qibla path's moment: the key
+                // may have changed with the configuration, and a warm
+                // row is one cheap read.
+                self.resolve_qibla().await;
                 if rolled {
                     // Completions are per civil date (A3); the new day
                     // starts with none.
@@ -347,6 +375,51 @@ impl Runtime {
                     *recover_mut(&self.network_health) =
                         (Health::Degraded, "OFFLINE (using cache)".to_owned());
                 }
+            }
+        }
+    }
+
+    /// Toggle a prayer's completion for today (A3): one SQLite write,
+    /// the served set kept in step with it. The write is authoritative
+    /// — a cache failure leaves the served state untouched and warns,
+    /// rather than claiming a toggle that never landed. Returns the
+    /// prayer's state after the attempt.
+    pub async fn toggle_completion(&self, prayer: Notifiable) -> bool {
+        let completed_at = self.clock().now_in(self.tz());
+        match self
+            .cache
+            .toggle_completion(self.day(), prayer, completed_at)
+            .await
+        {
+            Ok(completed) => {
+                let mut completions = recover_mut(&self.completions);
+                if completed {
+                    if !completions.contains(&prayer) {
+                        completions.push(prayer);
+                    }
+                } else {
+                    completions.retain(|completed| *completed != prayer);
+                }
+                completed
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "salat::app",
+                    "completion toggle for {prayer:?} failed: {error}"
+                );
+                recover(&self.completions).contains(&prayer)
+            }
+        }
+    }
+
+    /// Resolve the Qibla bearing into its slot (§17.1). Cosmetic data:
+    /// a failure warns and keeps the last value — the service strip
+    /// reports the window's health, not the footer's compass.
+    async fn resolve_qibla(&self) {
+        match self.service.qibla().await {
+            Ok(degrees) => *recover_mut(&self.qibla) = Some(degrees),
+            Err(error) => {
+                tracing::warn!(target: "salat::app", "qibla unresolved: {error}");
             }
         }
     }
@@ -546,6 +619,13 @@ pub(crate) mod testing {
         pub(crate) fn set_completions(&self, completions: Vec<Notifiable>) {
             *recover_mut(&self.runtime.completions) = completions;
         }
+
+        /// Set the served Qibla bearing directly — same precedent as
+        /// [`Fixture::set_completions`]: the fetch path is the service
+        /// module's test; the render tests need the value served.
+        pub(crate) fn set_qibla(&self, degrees: f64) {
+            *recover_mut(&self.runtime.qibla) = Some(degrees);
+        }
     }
 
     /// A `Runtime` for an arbitrary configuration, aligned with the
@@ -597,6 +677,7 @@ pub(crate) mod testing {
             window: RwLock::new(Arc::new(window)),
             completions: RwLock::new(Vec::new()),
             day: RwLock::new(dt::TODAY),
+            qibla: RwLock::new(None),
             svc_health: RwLock::new((Health::Ok, "RUNNING".to_owned())),
             network_health: RwLock::new((Health::Unknown, String::new())),
             config_health: RwLock::new((Health::Ok, "OK".to_owned())),

@@ -185,6 +185,7 @@ pub(crate) fn render_quick(model: &UiModel, area: Rect, buf: &mut Buffer, theme:
         buf,
         theme,
         &rows,
+        &prayer_table::TableSpec::QUICK,
     );
     y += rows.len() as u16;
 
@@ -330,6 +331,7 @@ fn prayer_rows(model: &UiModel, plan: &QuickPlan) -> Vec<PrayerRow> {
                 ),
                 state: model.states[index],
                 note: is_next.then(|| format!("· in {}", model.countdown.format())),
+                notif: None,
             }
         })
         .collect()

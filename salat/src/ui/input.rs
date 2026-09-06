@@ -15,6 +15,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::app::runtime::Runtime;
+use crate::domain::Notifiable;
+
 use super::shell::{Screen, Shell};
 
 /// What the event loop should do after one event (§15.2's dirty flag,
@@ -31,8 +34,11 @@ pub enum Outcome {
     Ignored,
 }
 
-/// Resolve one `Press` key against the shell, §15.4's order.
-pub fn resolve(key: KeyEvent, shell: &mut Shell) -> Outcome {
+/// Resolve one `Press` key against the shell, §15.4's order. Async
+/// because the dashboard's `c` completes a prayer through the store
+/// (A3) — one SQLite write awaited inline, then the loop rebuilds the
+/// model from the runtime's served state.
+pub async fn resolve(key: KeyEvent, shell: &mut Shell, runtime: &Runtime) -> Outcome {
     // 1. Global, always — before the overlay, so even a call to prayer
     //    yields to Ctrl-C.
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -63,7 +69,7 @@ pub fn resolve(key: KeyEvent, shell: &mut Shell) -> Outcome {
     }
 
     // 3. The focused screen's own keys.
-    if let Some(outcome) = screen_keys(key, shell) {
+    if let Some(outcome) = screen_keys(key, shell, runtime).await {
         return outcome;
     }
 
@@ -99,16 +105,44 @@ pub fn resolve(key: KeyEvent, shell: &mut Shell) -> Outcome {
     }
 }
 
-/// Step 3: the focused screen's keys. Phase 6's screens are shells —
-/// their vocabularies arrive with their phases (the dashboard's `c`,
-/// the matrix's Tab, …). The one screen with Phase 6 keys of its own
-/// is LOADING: Ctrl-C only, so it consumes everything else rather than
-/// letting the fallback navigate mid-boot.
-fn screen_keys(_key: KeyEvent, shell: &Shell) -> Option<Outcome> {
+/// Step 3: the focused screen's keys. LOADING consumes everything
+/// (nothing is navigable mid-boot); the DASHBOARD owns the §16.1 item 7
+/// trio; every other screen's vocabulary arrives with its phase and
+/// falls through to the global vocabulary meanwhile.
+async fn screen_keys(key: KeyEvent, shell: &mut Shell, runtime: &Runtime) -> Option<Outcome> {
     match shell.screen() {
         // Ctrl-C was already handled at step 1; the loading screen
         // offers nothing else to press.
         Screen::Loading => Some(Outcome::Ignored),
+        Screen::Dashboard => dashboard_keys(key, shell, runtime).await,
+        _ => None,
+    }
+}
+
+/// The dashboard's three keys (§16.1 item 7): `↑↓` move the TODAY
+/// cursor, `c` toggles the cursor row's completion. The cursor clamps
+/// to the five rows — the section says nothing of wrapping, and a
+/// clamp is the conservative reading. Everything else returns `None`
+/// so the global vocabulary (`q`, `1`–`4`, `?`, Esc) still applies.
+async fn dashboard_keys(key: KeyEvent, shell: &mut Shell, runtime: &Runtime) -> Option<Outcome> {
+    match key.code {
+        KeyCode::Up => {
+            shell.dashboard.cursor = shell.dashboard.cursor.saturating_sub(1);
+            Some(Outcome::Changed)
+        }
+        KeyCode::Down => {
+            shell.dashboard.cursor = (shell.dashboard.cursor + 1).min(Notifiable::ALL.len() - 1);
+            Some(Outcome::Changed)
+        }
+        KeyCode::Char('c') => {
+            // A3: the completion round-trips through the store; the
+            // `Changed` outcome makes the loop rebuild the model from
+            // the runtime's served set, so the badge is the store's
+            // answer, never a local guess.
+            let prayer = Notifiable::ALL.get(shell.dashboard.cursor).copied()?;
+            runtime.toggle_completion(prayer).await;
+            Some(Outcome::Changed)
+        }
         _ => None,
     }
 }
@@ -116,6 +150,7 @@ fn screen_keys(_key: KeyEvent, shell: &Shell) -> Option<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::runtime::testing;
     use crossterm::event::KeyEvent;
 
     fn press(code: KeyCode) -> KeyEvent {
@@ -124,6 +159,15 @@ mod tests {
 
     fn ctrl(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    /// Resolve against the §20.3 fixture runtime — the `c` arm's
+    /// store write needs a real one; every other key ignores it.
+    fn resolve(key: KeyEvent, shell: &mut Shell) -> Outcome {
+        let fixture = testing::snapshot_runtime();
+        fixture
+            .runtime
+            .block_on(async { super::resolve(key, shell, &fixture.runtime).await })
     }
 
     /// §23 Phase 6's test 1: `1`–`4` set the expected screen — from
@@ -217,5 +261,65 @@ mod tests {
             assert_eq!(resolve(press(key), &mut shell), Outcome::Ignored);
         }
         assert_eq!(*shell.screen(), Screen::Loading);
+    }
+
+    /// §16.1 item 7: `↑↓` move the cursor and clamp at both ends —
+    /// `↑` at the top stays on Fajr, `↓` past the bottom stays on
+    /// Isha; the spec names no wrap, so there is none.
+    #[test]
+    fn the_cursor_moves_and_clamps() {
+        let mut shell = Shell::new();
+        assert_eq!(resolve(press(KeyCode::Down), &mut shell), Outcome::Changed);
+        assert_eq!(shell.dashboard.cursor, 1);
+        assert_eq!(resolve(press(KeyCode::Up), &mut shell), Outcome::Changed);
+        assert_eq!(shell.dashboard.cursor, 0);
+        assert_eq!(resolve(press(KeyCode::Up), &mut shell), Outcome::Changed);
+        assert_eq!(shell.dashboard.cursor, 0, "clamped at the top");
+        for _ in 0..7 {
+            assert_eq!(resolve(press(KeyCode::Down), &mut shell), Outcome::Changed);
+        }
+        assert_eq!(shell.dashboard.cursor, 4, "clamped at the bottom");
+    }
+
+    /// A3's round trip: `c` on the cursor's row writes the completion
+    /// through SQLite and serves it back — `c` again un-completes.
+    /// The served set is the store's answer, read through a second
+    /// runtime on the same database file.
+    #[test]
+    fn c_toggles_a_completion_through_the_store() {
+        let fixture = testing::snapshot_runtime();
+        let mut shell = Shell::new();
+        shell.dashboard.cursor = 3; // Maghrib, the snapshot's next
+
+        {
+            let outcome = fixture.runtime.block_on(async {
+                super::resolve(press(KeyCode::Char('c')), &mut shell, &fixture.runtime).await
+            });
+            assert_eq!(outcome, Outcome::Changed);
+        }
+        assert_eq!(
+            fixture.runtime.completions(),
+            vec![Notifiable::Maghrib],
+            "the toggle landed in the served set"
+        );
+        // And the store row itself — the write, not the mirror.
+        let window = fixture.runtime.window();
+        let stored = fixture.runtime.block_on(async {
+            fixture
+                .store
+                .completions_for(window.today.date)
+                .await
+                .expect("the store is the fixture's own")
+        });
+        assert_eq!(stored, vec![Notifiable::Maghrib]);
+
+        // `c` again un-completes: the row is deleted, the set empties.
+        {
+            let outcome = fixture.runtime.block_on(async {
+                super::resolve(press(KeyCode::Char('c')), &mut shell, &fixture.runtime).await
+            });
+            assert_eq!(outcome, Outcome::Changed);
+        }
+        assert!(fixture.runtime.completions().is_empty());
     }
 }

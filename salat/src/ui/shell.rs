@@ -251,14 +251,9 @@ impl Shell {
     }
 
     /// Route one event through §15.4's resolution order and apply it.
-    /// Async because Phase 8's service arm will await; the resolution
-    /// itself only mutates shell state. Returns what the loop should
-    /// do next.
-    pub async fn handle(
-        &mut self,
-        event: Event,
-        _runtime: &Runtime,
-    ) -> Result<Outcome, SalatError> {
+    /// Async because resolution can write: the dashboard's `c` completes
+    /// a prayer through the store (A3) before returning.
+    pub async fn handle(&mut self, event: Event, runtime: &Runtime) -> Result<Outcome, SalatError> {
         let Event::Key(key) = event else {
             return Ok(Outcome::Ignored);
         };
@@ -267,7 +262,7 @@ impl Shell {
         if key.kind != KeyEventKind::Press {
             return Ok(Outcome::Ignored);
         }
-        Ok(input::resolve(key, self))
+        Ok(input::resolve(key, self, runtime).await)
     }
 }
 

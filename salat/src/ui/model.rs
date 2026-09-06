@@ -57,8 +57,8 @@ pub struct UiModel {
     /// The Settings editor's working copy — `None` outside an editor
     /// session (Phase 6+; quick mode has none).
     pub draft: Option<ConfigDraft>,
-    /// The qibla bearing — fetched on demand by the full UI's Qibla
-    /// screen, never by quick mode.
+    /// The qibla bearing — resolved by the full UI's boot and refresh
+    /// (§17.1), never by quick mode, which does not carry the value.
     pub qibla: Option<f64>,
     /// The frame's breakpoint classification. Quick mode pins
     /// [`Breakpoint::Small`] (§16.14 item 4) — it owns one layout and
@@ -93,6 +93,7 @@ pub fn build_model(runtime: &Runtime) -> UiModel {
         Notifiable::ALL.map(|prayer| window.state_of(prayer, &config, now, &runtime.completions()));
     let summary = day_summary(&window, &config, now);
     let status = runtime.status();
+    let qibla = runtime.qibla();
 
     UiModel {
         now,
@@ -106,7 +107,7 @@ pub fn build_model(runtime: &Runtime) -> UiModel {
         status,
         config,
         draft: None,
-        qibla: None,
+        qibla,
         breakpoint: Breakpoint::Small,
     }
 }

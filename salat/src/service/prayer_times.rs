@@ -233,6 +233,25 @@ impl PrayerTimeService {
         })
     }
 
+    /// The Qibla bearing for the current parameters (§17.1): one value
+    /// per location that never changes, so the cache answers every
+    /// call after the first launch — one small read, zero HTTP. The
+    /// cold miss makes one request and stores it forever.
+    ///
+    /// Keyed by the same `cache_key` as the prayer days, so a location
+    /// or method change simply reads (or fetches) a different row.
+    pub async fn qibla(&self) -> Result<f64, ServiceError> {
+        let params = self.params();
+        let key = cache_key(&params);
+        if let Some(degrees) = self.store.load_qibla(&key).await? {
+            return Ok(degrees);
+        }
+        let degrees = self.client.qibla(params.latitude, params.longitude).await?;
+        let fetched_at = self.clock.now_in(self.zone()?);
+        self.store.store_qibla(&key, degrees, fetched_at).await?;
+        Ok(degrees)
+    }
+
     /// §7.6: for each month around `today` — the month of `today`, of
     /// `today + 1 day`, and (the prose's prefetch, so tomorrow's Fajr
     /// is always available offline near month end) the month of the
