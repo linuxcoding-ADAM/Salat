@@ -6,8 +6,11 @@
 pub mod badge;
 pub mod bar;
 pub mod bigtext;
+pub mod chrome;
+pub mod crumb;
 pub mod hr;
 pub mod kbd_hint;
 pub mod panel;
 pub mod prayer_table;
 pub mod status_dot;
+pub mod too_small;

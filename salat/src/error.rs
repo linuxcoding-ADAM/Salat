@@ -69,8 +69,10 @@ impl From<ExitCode> for ProcessExitCode {
 }
 
 /// The error the ERROR screen renders, and the only error that crosses the
-/// process boundary (§18.1 layer 2).
-#[derive(Debug, thiserror::Error)]
+/// process boundary (§18.1 layer 2). `Clone` because the boot ladder
+/// reports the failure through the LOADING screen's callback while the
+/// command layer still needs to render and return the same error.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SalatError {
     /// `E001` — the city search / lookup failed.
     #[error("location lookup failed")]

@@ -14,14 +14,10 @@
 //! which no viewport is opened at all and the §14.6 one-line summary prints.
 
 use std::io::{IsTerminal as _, Stdout, Write as _};
-use std::sync::Once;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::Timelike as _;
-use crossterm::cursor::{Hide, Show};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::execute;
 use crossterm::terminal as cterm;
 use futures_util::StreamExt as _;
 use ratatui::buffer::Buffer;
@@ -45,6 +41,8 @@ use crate::ui::widgets::hr;
 use crate::ui::widgets::panel::Panel;
 use crate::ui::widgets::prayer_table::{self, PrayerRow};
 use crate::ui::widgets::status_dot;
+
+use super::{TerminalGuard, term_io};
 
 /// The strip's four groups (§16.14 item 10): component, label.
 const STRIP: [(ComponentId, &str); 4] = [
@@ -520,61 +518,6 @@ pub(crate) fn frame_to_string(buf: &Buffer, colored: bool) -> String {
     out
 }
 
-// ─────────────────────────   terminal guard       ───────────────────────
-
-/// Whether raw mode is currently on — the idempotence flag behind
-/// [`restore_terminal`], so the guard's `Drop`, a `?` propagation and
-/// the panic hook can all call it and exactly one restoration happens.
-static RAW_MODE: AtomicBool = AtomicBool::new(false);
-static HOOK_INSTALLED: Once = Once::new();
-
-/// Restore the terminal: show the cursor, leave raw mode. Idempotent.
-fn restore_terminal() {
-    if RAW_MODE.swap(false, Ordering::SeqCst) {
-        let _ = execute!(std::io::stdout(), Show);
-        let _ = cterm::disable_raw_mode();
-    }
-}
-
-/// Raw mode and the hidden cursor, restored however the command ends:
-/// `Drop` covers normal exit and `?` propagation, and the panic hook
-/// installed here covers the third path (§15.3) — it restores first,
-/// then delegates to the previous hook (color-eyre's, installed in
-/// `main`), so the panic report itself prints on a cooked terminal.
-struct TerminalGuard;
-
-impl TerminalGuard {
-    fn new() -> Result<Self, SalatError> {
-        cterm::enable_raw_mode().map_err(term_io)?;
-        if let Err(error) = execute!(std::io::stdout(), Hide) {
-            let _ = cterm::disable_raw_mode();
-            return Err(term_io(error));
-        }
-        RAW_MODE.store(true, Ordering::SeqCst);
-
-        HOOK_INSTALLED.call_once(|| {
-            let previous = std::panic::take_hook();
-            std::panic::set_hook(Box::new(move |info| {
-                restore_terminal();
-                previous(info);
-            }));
-        });
-        Ok(Self)
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        restore_terminal();
-    }
-}
-
-fn term_io(error: std::io::Error) -> SalatError {
-    SalatError::TerminalIo {
-        cause: error.to_string(),
-    }
-}
-
 // ─────────────────────────     live view        ─────────────────────────
 
 /// What a key event means to the quick loop (§16.14 item 7).
@@ -618,7 +561,7 @@ pub fn run_live(cli: &Cli) -> Result<ExitCode, SalatError> {
     }
 
     let theme = Theme::from(&runtime.config().display);
-    let _guard = TerminalGuard::new()?;
+    let _guard = TerminalGuard::new_inline()?;
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::with_options(
         backend,
@@ -1131,30 +1074,6 @@ mod tests {
             event.kind = KeyEventKind::Release;
         }
         assert!(matches!(key_action(&release), KeyAction::Ignore));
-    }
-
-    /// §15.3's third restoration path: the panic hook. Raw mode needs
-    /// a real terminal, so this runs under a pty —
-    /// `script -qec 'cargo test --lib -- --ignored panic_hook --exact'`
-    /// — and is ignored by the plain suite, where `TerminalGuard::new`
-    /// has no terminal to enter.
-    #[test]
-    #[ignore = "needs a pty (run under script(1))"]
-    fn panic_hook_restores_the_terminal() {
-        let _guard = TerminalGuard::new().expect("a terminal to enter raw mode on");
-        assert!(RAW_MODE.load(Ordering::SeqCst));
-
-        // The panic runs the installed hook — which must flip raw mode
-        // off — before unwinding to here; the guard's `Drop` then finds
-        // nothing left to do.
-        let result = std::panic::catch_unwind(|| {
-            panic!("terminal restoration check");
-        });
-        assert!(result.is_err(), "the panic was caught");
-        assert!(
-            !RAW_MODE.load(Ordering::SeqCst),
-            "the hook restored the terminal before unwinding"
-        );
     }
 
     /// §14.6's five golden files and §20's three snapshots — the

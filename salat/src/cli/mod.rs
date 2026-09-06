@@ -17,8 +17,9 @@ use crate::error::{ExitCode, SalatError};
 /// Shown after `--help`: the data attribution the brief requires.
 pub const ATTRIBUTION: &str = "Prayer times by AlAdhan — https://aladhan.com";
 
-/// The parsed command line (§14.2).
-#[derive(Debug, Parser)]
+/// The parsed command line (§14.2). `Clone` because the full TUI's
+/// boot thread takes its own copy (§16.11).
+#[derive(Debug, Clone, Parser)]
 #[command(
     name = "salat",
     version,
@@ -55,7 +56,7 @@ pub struct Cli {
 }
 
 /// The four subcommands (§14.2). Everything else is a root flag.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Print system status and exit
     Status,
@@ -93,7 +94,7 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, SalatError> {
         Some(Command::Daemon { once }) => commands::daemon::run(*once),
         None => {
             if cli.full {
-                commands::full::run()
+                commands::full::run(&cli)
             } else if once {
                 commands::quick::run_once(&cli)
             } else {

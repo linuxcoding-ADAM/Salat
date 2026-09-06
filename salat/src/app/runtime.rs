@@ -114,6 +114,18 @@ impl Runtime {
     /// The boot vacuum and today's completions are non-fatal (§17.3): a
     /// warning and a degraded detail, never an error.
     pub fn build(cli: &Cli) -> Result<Self, SalatError> {
+        Self::build_with(cli, |_| ())
+    }
+
+    /// [`Runtime::build`] with the §15.7 stage reporting the `--full`
+    /// LOADING screen renders: a [`BootState`] per stage as it *starts*.
+    /// Stages 4–5 (audio, prayer service) belong to Phases 10 and 8 —
+    /// they report and complete instantly here, so the ladder's shape
+    /// and progress fraction are real from Phase 6 on.
+    pub fn build_with<F>(cli: &Cli, mut on_state: F) -> Result<Self, SalatError>
+    where
+        F: FnMut(crate::app::boot::BootState),
+    {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -124,6 +136,13 @@ impl Runtime {
         // wired parts; the runtime itself cannot move into the future
         // it is driving.
         let boot = rt.block_on(async {
+            // Step 1 (index 0): Loading configuration — paths, file,
+            // validation (E201), all fatal here.
+            on_state(crate::app::boot::BootState {
+                stage: 0,
+                error: None,
+                location: None,
+            });
             let paths = resolve(cli.config.as_deref())?;
 
             let config_store = Arc::new(ConfigStore::new(paths.config.clone()));
@@ -131,12 +150,30 @@ impl Runtime {
                 .load()
                 .map_err(|error| error.into_salat_error(&paths.config))?;
             let cfg_rx = config_store.subscribe();
+
+            // Step 2 (index 1): Resolving location — coordinates were
+            // validated with the configuration, the timezone is parsed
+            // here (E103).
+            on_state(crate::app::boot::BootState {
+                stage: 1,
+                error: None,
+                location: None,
+            });
             let tz: Tz = config
                 .location
                 .timezone
                 .parse()
                 .map_err(|_| SalatError::TimezoneUndetermined)?;
 
+            // Step 3 (index 2): Calculating prayer times — cache,
+            // client, first window (E301–E304, E601). From here on the
+            // location label is known and published (§16.11 item 6).
+            let label = config.location.label.clone();
+            on_state(crate::app::boot::BootState {
+                stage: 2,
+                error: None,
+                location: Some(label.clone()),
+            });
             let clock: Arc<dyn Clock> = Arc::new(SystemClock);
             let cache = Arc::new(
                 Store::open(&paths.database)
@@ -174,6 +211,23 @@ impl Runtime {
                     Vec::new()
                 }
             };
+
+            // Step 4 (index 3): Initializing audio — never fatal, and
+            // Phase 10's concern; reported and completed instantly.
+            on_state(crate::app::boot::BootState {
+                stage: 3,
+                error: None,
+                location: Some(label.clone()),
+            });
+
+            // Step 5 (index 4): Starting the prayer service — the lock,
+            // planner and runner are Phase 8's; observer mode is a
+            // success, so this too completes instantly here.
+            on_state(crate::app::boot::BootState {
+                stage: 4,
+                error: None,
+                location: Some(label),
+            });
 
             Ok::<_, SalatError>(Boot {
                 clock,

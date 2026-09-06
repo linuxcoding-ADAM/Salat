@@ -75,11 +75,13 @@ fn offline(cmd: &mut Command) -> &mut Command {
 /// not-implemented error — exit `1` (§14.5 runtime), the `error[E000]`
 /// line on stderr, and an empty stdout: a frame or nothing (§14.6).
 /// Quick's bare and `--once` paths are real since Phase 5 and have
-/// their own exit-table tests below; `config` is real since Phase 1.
+/// their own exit-table tests below; `config` is real since Phase 1;
+/// `--full` is real since Phase 6 — it reads the controlling terminal
+/// directly, so it cannot run under a piped test harness and is
+/// covered by the pty checks instead.
 #[test]
 fn every_command_path_reports_not_implemented() {
     let cases: &[&[&str]] = &[
-        &["--full"],
         &["status"],
         &["test-adhan"],
         &["daemon"],

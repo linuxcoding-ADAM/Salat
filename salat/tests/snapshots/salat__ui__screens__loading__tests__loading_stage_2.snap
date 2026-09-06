@@ -1,0 +1,22 @@
+---
+source: salat/src/ui/screens/loading.rs
+expression: lines
+---
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+              ╭─ INITIALIZING ───────────────────────────────────╮              
+              │                      SALAT                       │              
+              │       v0.1.0 · Rust · Ratatui · Crossterm        │              
+              │                                                  │              
+              │ ✓  Configuration                                 │              
+              │ ✓  Location                                      │              
+              │ ▶  Prayer times.                                 │              
+              │ ○  Audio                                         │              
+              │ ○  Prayer service                                │              
+              │          ████████████░░░░░░░░░░░░░░░░░░          │              
+              │               40% · Sétif, Algeria               │              
+              ╰──────────────────────────────────────────────────╯
