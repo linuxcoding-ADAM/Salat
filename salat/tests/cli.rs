@@ -62,17 +62,24 @@ fn unknown_flag_exits_two() {
         .code(2);
 }
 
-/// Every not-yet-implemented command path answers with the typed
+/// Point the HTTP stack at a dead local port so api.aladhan.com is
+/// deterministically unreachable — the exit table's failure rows
+/// without depending on (or touching) any network.
+fn offline(cmd: &mut Command) -> &mut Command {
+    cmd.env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .env("HTTP_PROXY", "http://127.0.0.1:9")
+        .env("ALL_PROXY", "http://127.0.0.1:9")
+}
+
+/// Every still-unimplemented command path answers with the typed
 /// not-implemented error — exit `1` (§14.5 runtime), the `error[E000]`
 /// line on stderr, and an empty stdout: a frame or nothing (§14.6).
-/// Includes the piped (non-TTY) bare invocation, which §14.3 routes to
-/// the `--once` path. `config` is real since Phase 1 (§23).
+/// Quick's bare and `--once` paths are real since Phase 5 and have
+/// their own exit-table tests below; `config` is real since Phase 1.
 #[test]
 fn every_command_path_reports_not_implemented() {
     let cases: &[&[&str]] = &[
-        &[], // quick live — captured stdout is not a TTY, so this takes the once path
         &["--full"],
-        &["--once"],
         &["status"],
         &["test-adhan"],
         &["daemon"],
@@ -89,32 +96,56 @@ fn every_command_path_reports_not_implemented() {
     }
 }
 
-/// §14.6: piped output carries no ANSI escape bytes. The captured (pipe)
-/// stdout of the once path is empty here, which trivially satisfies the
-/// rule; the assertion documents it so Phase 5's golden tests inherit the
-/// invariant explicitly.
+/// §14.6's "API failure, no cache" row: `E301`, exit `4`, and nothing
+/// on stdout — the frame-or-nothing rule's empty case. The piped
+/// (non-TTY) stdout routes here per §14.3.
 #[test]
-fn piped_output_contains_no_ansi() {
+fn piped_once_without_cache_exits_four_with_nothing() {
     let (mut cmd, _state) = salat();
-    let assert = cmd.arg("--once").assert().failure().code(1);
-    let output = assert.get_output();
-    let stdout_empty = output.stdout.is_empty();
-    let stderr_ansi_free = !String::from_utf8_lossy(&output.stderr).contains('\u{1b}');
-    assert!(stdout_empty, "stdout must carry a frame or nothing");
-    assert!(stderr_ansi_free, "diagnostics must not use ANSI on a pipe");
+    offline(&mut cmd);
+    cmd.arg("--once")
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicates::str::contains("error[E301]"))
+        .stdout(predicates::str::is_empty());
 }
 
-/// `-v -v` must not break the run: the binary still exits with the typed
-/// error, and the log file is created under the isolated `XDG_STATE_HOME`
-/// (§18.4).
+/// §14.6 on a pipe: no ANSI escape bytes anywhere — stdout carries a
+/// frame or nothing (here, a real frame), diagnostics stay plain. The
+/// frame itself is the cached one from the warm-cache test below; its
+/// byte-level shape is the golden suite's business (§14.6).
+#[tokio::test]
+async fn piped_output_contains_no_ansi() {
+    let (mut cmd, _state) = salat_with_warm_cache().await;
+    offline(&mut cmd);
+    let output = cmd.arg("--once").assert().success().get_output().clone();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(!stdout.is_empty(), "stdout must carry a frame or nothing");
+    assert!(
+        stdout.contains("· cached"),
+        "the cached frame carries its marker:\n{stdout}"
+    );
+    assert!(!stdout.contains('\u{1b}'), "ANSI escape in piped stdout");
+    assert!(!stderr.contains('\u{1b}'), "ANSI escape in diagnostics");
+    assert!(
+        stderr.contains("warning[E302]: api.aladhan.com unreachable, using cached times"),
+        "the E302 warning on stderr:\n{stderr}"
+    );
+}
+
+/// `-v -v` must not break the run: the typed error still prints, and
+/// the log file is created under the isolated `XDG_STATE_HOME` (§18.4).
 #[test]
 fn verbose_run_logs_to_state_dir() {
     let (mut cmd, state) = salat();
+    offline(&mut cmd);
     cmd.args(["-v", "-v"])
         .assert()
         .failure()
-        .code(1)
-        .stderr(predicates::str::contains("error[E000]"));
+        .code(4)
+        .stderr(predicates::str::contains("error[E301]"));
     let log = state.path().join("salat").join("salat.log");
     assert!(log.is_file(), "log file missing at {}", log.display());
     let mut content = String::new();
@@ -122,6 +153,125 @@ fn verbose_run_logs_to_state_dir() {
         .and_then(|mut f| f.read_to_string(&mut content))
         .expect("log file readable");
     assert!(!content.trim().is_empty(), "log file is empty");
+}
+
+// ---------------------------------------------------------------------------
+// `salat --once` with a warm cache (§14.6's exit table, Phase 5)
+// ---------------------------------------------------------------------------
+
+/// A `salat` invocation like [`salat`], but with the prayer database
+/// pre-warmed around today (in the default config's zone) — as a
+/// previous run's fetch would have left it — so the once path serves
+/// from cache while the API is unreachable.
+async fn salat_with_warm_cache() -> (Command, tempfile::TempDir) {
+    use chrono::{Datelike, Duration};
+    use salat::api::params::Params;
+    use salat::app::clock::{Clock, SystemClock};
+    use salat::cache::{Store, cache_key};
+
+    let state = tempfile::tempdir().expect("tempdir for XDG_STATE_HOME");
+    let config = salat::config::Config::default();
+    let zone: chrono_tz::Tz = config
+        .location
+        .timezone
+        .parse()
+        .expect("the default config names a real zone");
+    // The Clock trait is the only source of "now" (§6.6) — even here,
+    // seeding a database, the system clock is asked through it.
+    let now = SystemClock.now_in(zone);
+    let today = now.date_naive();
+
+    let db = state.path().join("data").join("salat").join("salat.db");
+    std::fs::create_dir_all(db.parent().expect("the data dir has a parent"))
+        .expect("create the data dir");
+    let store = Store::open(&db).await.expect("open the prayer database");
+    let key = cache_key(&Params::from_parts(&config.location, &config.calculation));
+
+    // Yesterday, today and tomorrow — the window the run needs — may
+    // straddle month boundaries, so every distinct month around today
+    // is seeded.
+    let mut months = Vec::new();
+    for date in [today - Duration::days(1), today, today + Duration::days(1)] {
+        let month = (date.year(), date.month());
+        if !months.contains(&month) {
+            months.push(month);
+        }
+    }
+    for (year, month) in months {
+        store
+            .upsert_month(&key, &synth_month(zone, year, month), None, now)
+            .await
+            .expect("seed the month");
+    }
+
+    let mut cmd = Command::cargo_bin("salat").unwrap();
+    cmd.env("XDG_STATE_HOME", state.path())
+        .env("XDG_CONFIG_HOME", state.path().join("config"))
+        .env("XDG_DATA_HOME", state.path().join("data"))
+        .env("XDG_RUNTIME_DIR", state.path().join("run"));
+    (cmd, state)
+}
+
+/// A synthetic complete month of domain days — the dates are real, the
+/// times plausible and strictly ordered; only the window's coverage
+/// matters to the once path.
+fn synth_month(zone: chrono_tz::Tz, year: i32, month: u32) -> Vec<salat::domain::PrayerDay> {
+    use chrono::{Datelike, Duration, NaiveDate, TimeZone};
+    use salat::domain::{DayMeta, HijriDate, PrayerDay};
+
+    let first = NaiveDate::from_ymd_opt(year, month, 1).expect("a real month");
+    let next_month = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)
+    }
+    .expect("a real following month");
+    (0..)
+        .map(|offset| first + Duration::days(offset))
+        .take_while(|date| date < &next_month)
+        .map(|date| {
+            let wall = |h, m| {
+                zone.with_ymd_and_hms(date.year(), date.month(), date.day(), h, m, 0)
+                    .single()
+                    .unwrap_or_else(|| panic!("a real instant on {date}"))
+            };
+            let next_day = date.succ_opt().expect("a real next day");
+            let next = |h, m| {
+                zone.with_ymd_and_hms(next_day.year(), next_day.month(), next_day.day(), h, m, 0)
+                    .single()
+                    .unwrap_or_else(|| panic!("a real instant after {date}"))
+            };
+            PrayerDay {
+                date,
+                tz: zone,
+                times: [
+                    wall(5, 15),
+                    wall(6, 15),
+                    wall(12, 30),
+                    wall(16, 0),
+                    wall(19, 0),
+                    wall(19, 45),
+                ],
+                midnight: next(0, 30),
+                last_third: next(2, 30),
+                hijri: HijriDate {
+                    day: 1,
+                    month_number: 1,
+                    month_en: "Muḥarram".into(),
+                    month_ar: "مُحَرَّم".into(),
+                    year: 1448,
+                },
+                meta: DayMeta {
+                    method_id: 12,
+                    method_name: "Union Organization Islamic de France".into(),
+                    school: 0,
+                    lat: 36.19,
+                    lng: 5.41,
+                    tz_name: "Africa/Algiers".into(),
+                },
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

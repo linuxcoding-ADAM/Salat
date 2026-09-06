@@ -27,8 +27,8 @@ mod location;
 mod notify;
 pub mod scheduler;
 pub mod service;
-mod status;
-mod ui;
+pub mod status;
+pub mod ui;
 
 pub use app::clock::{Clock, MockClock, SystemClock};
 pub use cache::{CacheError, LoggedEvent, Store, cache_key};

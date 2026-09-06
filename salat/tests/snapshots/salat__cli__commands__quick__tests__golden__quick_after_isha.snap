@@ -1,0 +1,18 @@
+---
+source: salat/src/cli/commands/quick.rs
+expression: rendered
+---
+SALAT                                                                   21:38:23
+╭─ NEXT PRAYER ────────────────────────────────────────────────────────────────╮
+│ ● FAJR · 05:10                                                               │
+│ 07:31:37  REMAINING                                                          │
+│ ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+TODAY
+────────────────────────────────────────────────────────────────────────────────
+Fajr     05:09  ✓ passed · in 07:31:37
+Dhuhr    12:47  ✓ passed
+Asr      16:23  ✓ passed
+Maghrib  19:21  ✓ passed
+Isha     20:47  ✓ passed
+● svc  ○ notif  ○ adhan  ○ audio      Sétif, Algeria · 23 Rabīʿ al-awwal 1448 AH

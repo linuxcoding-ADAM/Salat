@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use draft::ConfigDraft;
-pub use store::{ConfigStore, Paths, scope_for};
+pub use store::{ConfigStore, Paths, resolve, scope_for};
 pub use validate::Violation;
 
 /// The only configuration schema version this build understands (§8.4).

@@ -51,6 +51,22 @@ pub enum ServiceError {
     Api(#[from] ApiError),
 }
 
+/// The §7.6 refresh outcome: the window now serving, and whether the
+/// revalidation reached the API. `revalidated == false` means the
+/// window is stored data served while the last network attempt
+/// failed — the caller surfaces that honestly (§17.3's `· cached`
+/// marker, `OFFLINE (using cache)`) rather than guessing freshness.
+#[derive(Debug)]
+pub struct Refreshed {
+    /// The window the refresh resolved to.
+    pub window: Arc<PrayerWindow>,
+    /// Whether the §7.5 revalidation could talk to the API at all
+    /// (`Fresh` or `NotModified`). A failed attempt degrades to the
+    /// cache without failing the refresh — prayer times are immutable
+    /// — but it is still a fact the caller must not hide.
+    pub revalidated: bool,
+}
+
 impl ServiceError {
     /// The §18.1 mapping: exactly one place decides presentation.
     pub fn to_salat_error(&self) -> SalatError {
@@ -169,8 +185,9 @@ impl PrayerTimeService {
     /// explicit path — this is not the hot path, §17.3), and serve the
     /// window. A failed revalidation degrades to the cache rather than
     /// failing the refresh: prayer times are immutable, so the stored
-    /// month is not made wrong by staying.
-    pub async fn refresh(&self) -> Result<Arc<PrayerWindow>, ServiceError> {
+    /// month is not made wrong by staying — but [`Refreshed`] says so,
+    /// so the caller can report `· cached` honestly (§17.3).
+    pub async fn refresh(&self) -> Result<Refreshed, ServiceError> {
         let today = self.clock.now_in(self.zone()?).date_naive();
         let params = self.params();
         let key = cache_key(&params);
@@ -180,6 +197,7 @@ impl PrayerTimeService {
         let (year, month) = (today.year(), today.month());
         let stored_etag = self.store.month_etag(&key, year, month).await?;
         let etag = stored_etag.as_deref().unwrap_or("");
+        let mut revalidated = true;
         match self
             .client
             .revalidate_calendar(year, month, &params, etag)
@@ -201,13 +219,18 @@ impl PrayerTimeService {
                     target: "salat::service",
                     "refresh revalidation failed, serving from cache: {error}"
                 );
+                revalidated = false;
             }
         }
 
         if let Ok(mut memo) = self.memo.write() {
             *memo = None;
         }
-        self.window(today).await
+        let window = self.window(today).await?;
+        Ok(Refreshed {
+            window,
+            revalidated,
+        })
     }
 
     /// §7.6: for each month around `today` — the month of `today`, of

@@ -31,7 +31,7 @@ pub use summary::{DaySummary, day_summary};
 /// every derived value is a pure function of the fixtures.
 #[cfg(test)]
 pub(crate) mod testing {
-    use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
+    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
     use chrono_tz::Tz;
 
     use super::super::app::clock::{Clock as _, MockClock};
@@ -81,6 +81,10 @@ pub(crate) mod testing {
         /// (date, hour, minute) — often `date + 1`.
         midnight: (NaiveDate, u32, u32),
         last_third: (NaiveDate, u32, u32),
+        /// The Hijri day this civil date maps to — the recorded
+        /// calendar's answer (§7.8), which lags the civil date by 18
+        /// days in this month, so it cannot be derived from `date`.
+        hijri_day: u32,
     }
 
     fn day(spec: DaySpec) -> PrayerDay {
@@ -92,8 +96,9 @@ pub(crate) mod testing {
             last_third: at(spec.last_third.0, spec.last_third.1, spec.last_third.2, 0),
             hijri: HijriDate {
                 // The API's real answer for this window: Rabīʿ al-awwal
-                // 1448 (the calendar fixture, §7.8).
-                day: spec.date.day(),
+                // 1448 (the calendar fixture, §7.8 — Sep 1 → 19, so
+                // Sep 5 → 23).
+                day: spec.hijri_day,
                 month_number: 3,
                 month_en: "Rabīʿ al-awwal".to_owned(),
                 month_ar: "رَبيع الأوّل".to_owned(),
@@ -119,12 +124,14 @@ pub(crate) mod testing {
                 times: [(5, 8), (6, 43), (12, 46), (16, 24), (19, 22), (20, 48)],
                 midnight: (TODAY, 0, 36),
                 last_third: (TODAY, 2, 46),
+                hijri_day: 22,
             })),
             today: day(DaySpec {
                 date: TODAY,
                 times: [(5, 9), (6, 44), (12, 47), (16, 23), (19, 21), (20, 47)],
                 midnight: (TOMORROW, 0, 37),
                 last_third: (TOMORROW, 2, 47),
+                hijri_day: 23,
             }),
             tomorrow: day(DaySpec {
                 date: TOMORROW,
@@ -139,6 +146,7 @@ pub(crate) mod testing {
                     2,
                     46,
                 ),
+                hijri_day: 24,
             }),
         }
     }

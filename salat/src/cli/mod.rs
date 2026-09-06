@@ -86,16 +86,20 @@ pub enum Command {
 pub fn dispatch(cli: Cli) -> Result<ExitCode, SalatError> {
     let stdout_is_tty = std::io::stdout().is_terminal();
     let once = cli.once || !stdout_is_tty;
-    match (cli.command, cli.full, once) {
-        (Some(Command::Status), _, _) => commands::status::run(),
-        (Some(Command::Config { edit }), _, _) => {
-            commands::config::run(edit, cli.config.as_deref())
+    match &cli.command {
+        Some(Command::Status) => commands::status::run(),
+        Some(Command::Config { edit }) => commands::config::run(*edit, cli.config.as_deref()),
+        Some(Command::TestAdhan) => commands::test_adhan::run(),
+        Some(Command::Daemon { once }) => commands::daemon::run(*once),
+        None => {
+            if cli.full {
+                commands::full::run()
+            } else if once {
+                commands::quick::run_once(&cli)
+            } else {
+                commands::quick::run_live(&cli)
+            }
         }
-        (Some(Command::TestAdhan), _, _) => commands::test_adhan::run(),
-        (Some(Command::Daemon { once }), _, _) => commands::daemon::run(once),
-        (None, true, _) => commands::full::run(),
-        (None, false, true) => commands::quick::run_once(),
-        (None, false, false) => commands::quick::run_live(),
     }
 }
 

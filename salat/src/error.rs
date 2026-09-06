@@ -128,6 +128,27 @@ pub enum SalatError {
     /// `E601` — the SQLite cache failed.
     #[error("database error")]
     DatabaseFailed,
+    /// `E901` — the tokio runtime could not be created, so no async
+    /// service can start. Not in the design's §18.2 table (which has no
+    /// code for "the process itself cannot start"); numbered in the
+    /// otherwise-unused 9xx range so it cannot collide with a future
+    /// design code, the same accommodation `E000` makes for
+    /// implementation-phase reality.
+    #[error("could not start the task runtime")]
+    RuntimeStartFailed {
+        /// Why the runtime could not be created (errno text).
+        cause: String,
+    },
+    /// `E902` — the terminal could not be driven: raw mode, a size
+    /// query or a draw failed. Like `E901`, not in the design's §18.2
+    /// table (which stops at the process's own services); numbered
+    /// alongside it in the 9xx range so it cannot collide with a future
+    /// design code.
+    #[error("terminal i/o failed")]
+    TerminalIo {
+        /// Why the terminal operation failed (errno text).
+        cause: String,
+    },
     /// `E000` — the command's service arrives in a later phase (§23).
     /// Transient: exists only while phases land one at a time.
     #[error("{command} is not implemented yet")]
@@ -154,6 +175,8 @@ impl SalatError {
             SalatError::AudioPlaybackFailed => "E403",
             SalatError::NotificationsUnavailable => "E501",
             SalatError::DatabaseFailed => "E601",
+            SalatError::RuntimeStartFailed { .. } => "E901",
+            SalatError::TerminalIo { .. } => "E902",
         }
     }
 
@@ -176,6 +199,8 @@ impl SalatError {
             SalatError::AudioPlaybackFailed => "ADHAN PLAYBACK FAILED",
             SalatError::NotificationsUnavailable => "NOTIFICATIONS UNAVAILABLE",
             SalatError::DatabaseFailed => "DATABASE ERROR",
+            SalatError::RuntimeStartFailed { .. } => "RUNTIME START FAILED",
+            SalatError::TerminalIo { .. } => "TERMINAL I/O FAILED",
         }
     }
 
@@ -224,6 +249,8 @@ impl SalatError {
                 vec!["→ no d-bus session bus is available".into()]
             }
             SalatError::DatabaseFailed => vec!["→ the cache database is unusable".into()],
+            SalatError::RuntimeStartFailed { cause } => vec![format!("→ {cause}")],
+            SalatError::TerminalIo { cause } => vec![format!("→ {cause}")],
             SalatError::NotImplemented { command } => {
                 vec![format!("→ {command} arrives in a later phase (§23)")]
             }
@@ -274,6 +301,8 @@ impl SalatError {
             SalatError::AudioPlaybackFailed => &[ErrorAction::Retry, ErrorAction::Back],
             SalatError::NotificationsUnavailable => &[ErrorAction::Back],
             SalatError::DatabaseFailed => &[ErrorAction::Retry, ErrorAction::Back],
+            SalatError::RuntimeStartFailed { .. } => &[ErrorAction::Retry, ErrorAction::Back],
+            SalatError::TerminalIo { .. } => &[ErrorAction::Back],
             SalatError::NotImplemented { .. } => &[ErrorAction::Back],
         }
     }
@@ -340,6 +369,12 @@ mod tests {
             SalatError::AudioPlaybackFailed,
             SalatError::NotificationsUnavailable,
             SalatError::DatabaseFailed,
+            SalatError::RuntimeStartFailed {
+                cause: "io error".into(),
+            },
+            SalatError::TerminalIo {
+                cause: "inappropriate ioctl for device".into(),
+            },
             SalatError::NotImplemented { command: "status" },
         ]
     }
@@ -361,7 +396,7 @@ mod tests {
             assert!(!err.help().is_empty(), "no help for {code}");
             assert!(!err.actions().is_empty(), "no actions for {code}");
         }
-        assert_eq!(seen.len(), 16);
+        assert_eq!(seen.len(), 18);
     }
 
     /// The §14.5 exit-code mapping: E201/E202 → 3, E301–E304 → 4, the rest

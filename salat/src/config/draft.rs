@@ -11,6 +11,11 @@ use super::Config;
 /// form would change prayer times mid-keystroke. It mutates `working`,
 /// and [`ConfigDraft::apply_to`] promotes the result only through
 /// `ConfigStore::save`, which validates before the file is touched.
+///
+/// `Clone` exists so a snapshot of the model (which carries the draft,
+/// §15.1) stays cheap; the draft itself is only ever mutated through
+/// `working`.
+#[derive(Debug, Clone)]
 pub struct ConfigDraft {
     original: Config,
     working: Config,

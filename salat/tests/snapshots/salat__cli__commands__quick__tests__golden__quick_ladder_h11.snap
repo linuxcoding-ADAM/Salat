@@ -1,0 +1,14 @@
+---
+source: salat/src/cli/commands/quick.rs
+expression: rendered
+---
+SALAT                                                                   17:38:23
+╭─ NEXT PRAYER ────────────────────────────────────────────────────────────────╮
+│ ● MAGHRIB · 19:21                                                            │
+│ 01:42:37  REMAINING                                                          │
+│ ██████████████░░░░░░░░░░░░░░░░░░░░                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Dhuhr    12:47  ✓ passed
+Asr      16:23  ✓ passed
+Maghrib  19:21  ● next · in 01:42:37
+Isha     20:47  ○ upcoming

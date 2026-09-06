@@ -766,11 +766,13 @@ async fn refresh_with_a_304_keeps_the_cached_month() {
         Arc::new(clock),
     );
 
-    let window = service.refresh().await.expect("refresh serves the window");
+    let refreshed = service.refresh().await.expect("refresh serves the window");
     assert_eq!(client.revalidation_calls(), 1);
     assert_eq!(client.calendar_calls(), 0, "a 304 never refetches");
+    // A 304 reached the API: the window is fresh, not cached-by-failure.
+    assert!(refreshed.revalidated);
     assert_eq!(
-        window.today.date,
+        refreshed.window.today.date,
         NaiveDate::from_ymd_opt(2026, 9, 5).unwrap()
     );
 }

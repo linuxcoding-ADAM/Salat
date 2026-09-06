@@ -13,4 +13,4 @@
 
 pub mod prayer_times;
 
-pub use prayer_times::{PrayerTimeService, ServiceError};
+pub use prayer_times::{PrayerTimeService, Refreshed, ServiceError};
