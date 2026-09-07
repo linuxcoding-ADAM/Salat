@@ -24,7 +24,7 @@ pub mod api;
 mod audio;
 pub mod domain;
 mod location;
-mod notify;
+pub mod notify;
 pub mod scheduler;
 pub mod service;
 pub mod status;

@@ -38,9 +38,8 @@ use crate::cli::Cli;
 use crate::config::{Config, ConfigStore, resolve};
 use crate::domain::{EventKind, Notifiable, PrayerWindow, day_summary, plan_events};
 use crate::error::SalatError;
-use crate::scheduler::{
-    Scheduler, SchedulerDeps, SchedulerHandle, ServiceEvent, TracingSink, WindowSource,
-};
+use crate::notify::{DesktopNotifier, NoopNotifier, Notifier, NotifySink};
+use crate::scheduler::{Scheduler, SchedulerDeps, SchedulerHandle, ServiceEvent, WindowSource};
 use crate::service::{PrayerTimeService, ServiceError};
 use crate::status::{Component, ComponentId, Health, NextEvent, SystemStatus};
 
@@ -107,6 +106,11 @@ pub struct Runtime {
     /// closed — the UI subscribes before or after the runner spawns,
     /// whichever its loop finds convenient.
     svc_tx: broadcast::Sender<ServiceEvent>,
+    /// The notification subsystem (§12) — `DesktopNotifier` when
+    /// notifications are enabled (probed once, at boot stage 4),
+    /// `NoopNotifier` when they are not. The scheduler's sink sends
+    /// through it; Phase 12's Status reads `report()`.
+    notifier: Arc<dyn Notifier>,
     /// The §4.3 arbitration outcome for this process.
     service_owner: RwLock<ServiceOwner>,
     /// The held lock and the runner's handle — present iff
@@ -156,6 +160,7 @@ struct Boot {
     completions: Vec<Notifiable>,
     today: NaiveDate,
     qibla: Option<f64>,
+    notifier: Arc<dyn Notifier>,
     scope: String,
     lock_path: PathBuf,
 }
@@ -283,13 +288,22 @@ impl Runtime {
                 tracing::warn!(target: "salat::app", "qibla unresolved for this location");
             }
 
-            // Step 4 (index 3): Initializing audio — never fatal, and
-            // Phase 10's concern; reported and completed instantly.
+            // Step 4 (index 3): Initializing audio — Phase 10's, but
+            // §12.3 hangs the notification capability probe off the
+            // same stage: one D-Bus session round-trip, never fatal,
+            // bounded by five seconds. `notifications.enabled = false`
+            // skips the probe entirely (§12.3's DISABLED row) — there
+            // is nothing to talk to.
             on_state(crate::app::boot::BootState {
                 stage: 3,
                 error: None,
                 location: Some(label.clone()),
             });
+            let notifier: Arc<dyn Notifier> = if config.notifications.enabled {
+                Arc::new(DesktopNotifier::probed().await)
+            } else {
+                Arc::new(NoopNotifier)
+            };
 
             // Step 5 (index 4): Starting the prayer service — the lock,
             // planner and runner are Phase 8's; observer mode is a
@@ -319,6 +333,7 @@ impl Runtime {
                 completions,
                 today,
                 qibla,
+                notifier,
                 scope,
                 lock_path,
             })
@@ -342,6 +357,7 @@ impl Runtime {
             scope: boot.scope,
             lock_path: boot.lock_path,
             svc_tx: broadcast::channel(64).0,
+            notifier: boot.notifier,
             service_owner: RwLock::new(ServiceOwner::Standalone),
             scheduler: RwLock::new(None),
         }))
@@ -421,7 +437,10 @@ impl Runtime {
                     clock: self.clock(),
                     store: Arc::clone(&self.cache),
                     scope: self.scope.clone(),
-                    sink: Arc::new(TracingSink),
+                    sink: Arc::new(NotifySink::new(
+                        Arc::clone(&self.notifier),
+                        self.subscribe_config(),
+                    )),
                     windows: Arc::new(RuntimeWindowSource {
                         runtime: Arc::downgrade(self),
                     }),
@@ -865,6 +884,10 @@ pub(crate) mod testing {
             scope: "default".to_owned(),
             lock_path: PathBuf::new(),
             svc_tx: broadcast::channel(64).0,
+            // The fixture never starts a scheduler, so nothing sends —
+            // a `NoopNotifier` keeps the fixture hermetic (no D-Bus in
+            // unit tests).
+            notifier: Arc::new(NoopNotifier),
             service_owner: RwLock::new(ServiceOwner::Standalone),
             scheduler: RwLock::new(None),
         };
