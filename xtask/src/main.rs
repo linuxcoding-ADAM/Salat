@@ -20,7 +20,7 @@ const USAGE: &str = "\
 usage: cargo xtask <task>
 
 tasks:
-  gen-cities      regenerate salat/assets/cities.bin from GeoNames (§9.2)
+  gen-cities      regenerate salat/assets/cities.bin from GeoNames + curated extras (§9.2)
   screenshots     regenerate docs/screenshots/ at each breakpoint (§22.4)
   check-fixtures  re-capture the AlAdhan endpoints live and compare the
                   response shape against the committed fixtures (§7.8) —
@@ -80,17 +80,24 @@ struct CityRecord {
 }
 
 /// Regenerate `salat/assets/cities.bin` from GeoNames `cities15000.txt`
-/// (§9.2): population ≥ 15,000, country names joined from
-/// `countryInfo.txt`, one tz table, everything little-endian. The source
-/// is a local path passed as the argument, or a live download when none
-/// is — regeneration must not depend on remembering where a dump was
-/// saved.
+/// (§9.2) plus the curated `assets/extra_cities.tsv`: population ≥
+/// 15,000 rows from the dump, hand-verified places the population
+/// filter drops from the extras file, country names joined from
+/// `countryInfo.txt`, one tz table, everything little-endian. The two
+/// GeoNames files are a local path passed as the arguments, or a live
+/// download when none are — regeneration must not depend on
+/// remembering where a dump was saved. The extras file is always the
+/// committed one: it is curated in this repo, not downloaded.
 fn gen_cities() -> Result<String, String> {
     let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../salat/assets/cities.bin");
+    let extras = Path::new(env!("CARGO_MANIFEST_DIR")).join("../salat/assets/extra_cities.tsv");
     let (cities_source, countries_source) = sources()?;
 
     let countries = read_country_names(&countries_source)?;
-    let mut cities = read_cities(&cities_source, &countries)?;
+    let (mut cities, primary_ids) = read_cities(&cities_source, &countries)?;
+    let (mut extras, retired) = read_extras(&extras, &countries, &primary_ids)?;
+    let curated = extras.len();
+    cities.append(&mut extras);
     // Deterministic output regardless of the dump's own row order: sort
     // by name then country code, so the same snapshot always encodes to
     // the same bytes.
@@ -112,8 +119,9 @@ fn gen_cities() -> Result<String, String> {
     }
     std::fs::write(&out, &bytes).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
     Ok(format!(
-        "{} cities · {} zones · {} bytes written to {} (§9.2)",
+        "{} cities ({} curated, {retired} retired) · {} zones · {} bytes written to {} (§9.2)",
         cities.len(),
+        curated,
         distinct_zones(&cities),
         bytes.len(),
         out.display()
@@ -199,14 +207,17 @@ fn read_country_names(path: &Path) -> Result<std::collections::BTreeMap<String, 
 
 /// The §9.2 city rows: name (1), latitude (4), longitude (5), country
 /// code (8), population (14), timezone (17) — keeping only population
-/// ≥ 15,000 rows that carry a timezone and a known country.
+/// ≥ 15,000 rows that carry a timezone and a known country. The
+/// geonameids (column 0) come back alongside, so the curated extras
+/// can retire themselves against them.
 fn read_cities(
     path: &Path,
     countries: &std::collections::BTreeMap<String, String>,
-) -> Result<Vec<CityRecord>, String> {
+) -> Result<(Vec<CityRecord>, BTreeSet<u32>), String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let mut cities = Vec::new();
+    let mut ids = BTreeSet::new();
     for line in text.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
         if fields.len() < 18 {
@@ -235,6 +246,9 @@ fn read_cities(
         {
             continue;
         }
+        if let Ok(id) = fields[0].parse::<u32>() {
+            ids.insert(id);
+        }
         cities.push(CityRecord {
             name: fields[1].to_owned(),
             cc: fields[8].to_owned(),
@@ -251,7 +265,88 @@ fn read_cities(
                 .to_owned(),
         );
     }
-    Ok(cities)
+    Ok((cities, ids))
+}
+
+/// The curated extras (`assets/extra_cities.tsv`): hand-verified
+/// places GeoNames' population filter drops (population 0 — no
+/// `cities*` dump can ever carry them). Unlike the dump's rows, a
+/// malformed extra is a hard error with its line number — the file is
+/// hand-maintained, and a silent skip would hide a typo. A row whose
+/// geonameid the primary dump already carries is retired (skipped and
+/// counted), so a place that gains a population estimate is never
+/// embedded twice.
+fn read_extras(
+    path: &Path,
+    countries: &std::collections::BTreeMap<String, String>,
+    primary_ids: &BTreeSet<u32>,
+) -> Result<(Vec<CityRecord>, usize), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut records = Vec::new();
+    let mut ids = BTreeSet::new();
+    let mut retired = 0;
+    for (number, line) in text.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let where_ = format!("{}:{}", path.display(), number + 1);
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 7 {
+            return Err(format!(
+                "{where_}: expected geonameid, name, latitude, longitude, country-code, timezone, population, region"
+            ));
+        }
+        let id: u32 = fields[0]
+            .parse()
+            .map_err(|_| format!("{where_}: geonameid {:?} is not a number", fields[0]))?;
+        if !ids.insert(id) {
+            return Err(format!("{where_}: geonameid {id} appears twice"));
+        }
+        if primary_ids.contains(&id) {
+            retired += 1;
+            continue;
+        }
+        let name = fields[1];
+        if name.is_empty() {
+            return Err(format!("{where_}: empty name"));
+        }
+        let (Ok(lat), Ok(lng)) = (fields[2].parse::<f64>(), fields[3].parse::<f64>()) else {
+            return Err(format!("{where_}: latitude/longitude are not numbers"));
+        };
+        if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lng) {
+            return Err(format!("{where_}: {lat},{lng} out of range"));
+        }
+        let Some(country) = countries.get(fields[4]) else {
+            return Err(format!("{where_}: unknown country code {:?}", fields[4]));
+        };
+        let tz = fields[5];
+        if tz.is_empty() {
+            return Err(format!("{where_}: empty timezone"));
+        }
+        let population: u32 = fields[6]
+            .parse()
+            .map_err(|_| format!("{where_}: population {:?} is not a number", fields[6]))?;
+        // The same one-byte-length contract as the dump's rows.
+        if name.len() > u8::MAX as usize
+            || country.len() > u8::MAX as usize
+            || tz.len() > u8::MAX as usize
+        {
+            return Err(format!("{where_}: a field exceeds 255 bytes"));
+        }
+        // `region` (column 8) is provenance for the human verifying the
+        // row — the index does not carry it.
+        records.push(CityRecord {
+            name: name.to_owned(),
+            cc: fields[4].to_owned(),
+            country: country.clone(),
+            lat,
+            lng,
+            tz: tz.to_owned(),
+            population,
+        });
+    }
+    Ok((records, retired))
 }
 
 /// The distinct zone count, for the report.

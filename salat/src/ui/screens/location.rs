@@ -530,9 +530,13 @@ fn error_line<'a>(message: &'a str, code: &'a str, theme: &Theme) -> Span<'a> {
     Span::styled(format!("  {message} · {code}"), Style::new().fg(theme.red))
 }
 
-/// GeoNames populations the design renders as `288k`.
+/// GeoNames populations the design renders as `288k`. A population of
+/// 0 is GeoNames' "no estimate carried" (the curated extras are
+/// exactly such places) — an em dash, never a misleading `0`.
 fn population(pop: u32) -> String {
-    if pop >= 1_000_000 {
+    if pop == 0 {
+        "—".to_owned()
+    } else if pop >= 1_000_000 {
         format!("{:.1}m", f64::from(pop) / 1e6)
     } else if pop >= 1_000 {
         format!("{}k", pop / 1_000)
@@ -657,6 +661,28 @@ mod tests {
         let text = rendered(80, 24, &state).join("\n");
         assert!(text.contains("● Sétif, Algeria"), "the row:\n{text}");
         assert!(!text.contains("288k"), "no hint at small:\n{text}");
+    }
+
+    /// A curated place with no GeoNames population estimate renders an
+    /// em dash, never a misleading `0`.
+    #[test]
+    fn population_zero_renders_as_no_estimate() {
+        let state = LocationState {
+            query: "Tamokra".to_owned(),
+            results: vec![CityMatch {
+                name: "Tamokra".to_owned(),
+                country: "Algeria".to_owned(),
+                cc: "DZ".to_owned(),
+                lat: 36.39322,
+                lng: 4.66446,
+                tz: "Africa/Algiers".to_owned(),
+                population: 0,
+            }],
+            ..LocationState::default()
+        };
+        let text = rendered(100, 30, &state).join("\n");
+        assert!(text.contains("● Tamokra, Algeria"), "the row:\n{text}");
+        assert!(text.contains("— · Africa/Algiers"), "the hint:\n{text}");
     }
 
     /// §16.6 item 6's own no-match wording.

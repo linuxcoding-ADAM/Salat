@@ -459,7 +459,7 @@ mod tests {
     fn the_embedded_index_parses() {
         let index = load().expect("the committed cities.bin");
         assert_eq!(index.zones.len(), 322);
-        assert_eq!(index.cities.len(), 34_089);
+        assert_eq!(index.cities.len(), 34_090);
     }
 
     /// §9.2's own example: `Setif` finds `Sétif` — diacritic- and
@@ -472,6 +472,37 @@ mod tests {
         assert_eq!(top.name, "Sétif");
         assert_eq!(top.country, "Algeria");
         assert_eq!(top.tz, "Africa/Algiers");
+    }
+
+    /// The curated extras ride along in the committed asset: Tamokra
+    /// (Béjaïa, Algeria) carries population 0 in GeoNames, so no
+    /// `cities*` dump can ever include it — it is hand-verified from
+    /// the DZ dump (geonameid 2478073) and merged by gen-cities, and
+    /// the search returns its exact record.
+    #[test]
+    fn curated_tamokra_is_searchable_with_exact_coordinates() {
+        let index = load().expect("the committed cities.bin");
+        let results = index.search("Tamokra");
+        let top = results.first().expect("the curated match");
+        assert_eq!(top.name, "Tamokra");
+        assert_eq!(top.country, "Algeria");
+        assert_eq!(top.cc, "DZ");
+        assert_eq!(top.tz, "Africa/Algiers");
+        assert!(
+            (top.lat - 36.39322).abs() < 1e-6,
+            "latitude was {}",
+            top.lat
+        );
+        assert!(
+            (top.lng - 4.66446).abs() < 1e-6,
+            "longitude was {}",
+            top.lng
+        );
+        // And a coordinate entry at Tamokra's own point now derives
+        // its nearest city honestly: Tamokra itself, zero kilometres.
+        let (city, km) = index.nearest(36.39322, 4.66446).expect("a nearest city");
+        assert_eq!(city.name, "Tamokra");
+        assert!(km < 1.0, "distance was {km} km");
     }
 
     /// The comma form matches too — `Setif, Algeria` and a country

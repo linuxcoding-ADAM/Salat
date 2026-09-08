@@ -16,8 +16,10 @@ salat daemon         Run the scheduler headlessly (for systemd)
 
 Prayer times come from the [AlAdhan API](https://aladhan.com) — the sole
 provider for v1. City search is offline, backed by an embedded index of
-[GeoNames](https://www.geonames.org) cities (population ≥ 15,000),
-regenerated with `cargo run -p xtask -- gen-cities`.
+[GeoNames](https://www.geonames.org) cities (population ≥ 15,000) plus a
+small curated list of verified places GeoNames carries no population for
+(`salat/assets/extra_cities.tsv`), regenerated with
+`cargo run -p xtask -- gen-cities`.
 
 ## Status
 

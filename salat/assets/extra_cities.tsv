@@ -1,0 +1,19 @@
+# Curated places the GeoNames population filter drops: real, verified
+# populated places whose GeoNames record carries population 0, so no
+# cities*. dump can ever include them (cities500 = population > 500).
+# Each row is copied from the GeoNames country dump (CC-BY 4.0) and
+# cites the geonameid it was verified against; a row without a
+# verifiable geonameid does not belong here.
+#
+# Columns, TAB-separated:
+#   geonameid  name  latitude  longitude  country-code  timezone  population  region
+#
+# `population` is GeoNames' own estimate (0 = none carried); `region`
+# is provenance for the human verifying the row — gen-cities ignores
+# it. gen-cities skips a row whose geonameid the primary cities15000
+# dump already carries, so a place that later gains a population
+# estimate cannot be embedded twice.
+#
+# Verified 2026-09-08 against https://download.geonames.org/export/dump/DZ.zip:
+#   2478073  Tamokra  P PPL  36.39322  4.66446  admin1 18 (Béjaïa), admin2 2507644 (Daïra d'Akbou)
+2478073	Tamokra	36.39322	4.66446	DZ	Africa/Algiers	0	Béjaïa
