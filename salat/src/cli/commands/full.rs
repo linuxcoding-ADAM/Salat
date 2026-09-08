@@ -272,7 +272,16 @@ async fn run_loop(
     let mut signal_rx = signals::forward();
 
     let mut shell = Shell::new();
-    let mut model = build_model(runtime);
+    // §8.5's editor visibility: every model this loop builds carries
+    // the shell's open draft, so the settings screens render half-made
+    // edits the moment they are made. `build_model` itself stays
+    // draft-blind — quick mode and the tests build draft-less models.
+    let rebuild = |shell: &Shell| {
+        let mut model = build_model(runtime);
+        model.draft = shell.draft.clone();
+        model
+    };
+    let mut model = rebuild(&shell);
     let mut previous_states = model.states;
     let mut last_draw = Instant::now();
     let mut dirty = true;
@@ -293,7 +302,7 @@ async fn run_loop(
                     Outcome::Changed => {
                         let (width, height) =
                             crossterm::terminal::size().map_err(term_io)?;
-                        model = build_model(runtime);
+                        model = rebuild(&shell);
                         model.breakpoint = Breakpoint::of_size(width, height);
                         dirty = true;
                     }
@@ -311,7 +320,7 @@ async fn run_loop(
                 runtime.refresh_on_rollover().await;
                 // The frame's breakpoint is a per-frame fact (§4.5).
                 let (width, height) = crossterm::terminal::size().map_err(term_io)?;
-                let rebuilt = build_model(runtime);
+                let rebuilt = rebuild(&shell);
                 // §16.7 item 3's transition path. In observer mode it
                 // is the only alarm (the daemon owns the fire); in
                 // owner mode it is the §10.1 backstop — `adhan = false`
@@ -335,7 +344,7 @@ async fn run_loop(
                     // The runtime's own receiver holds the same pending
                     // publication, so this applies rather than waits.
                     runtime.on_config_change().await;
-                    model = build_model(runtime);
+                    model = rebuild(&shell);
                     previous_states = model.states;
                     dirty = true;
                 }
@@ -350,7 +359,7 @@ async fn run_loop(
             service = svc_rx.recv() => match service {
                 Ok(event) => {
                     if shell.on_service_event(event) {
-                        model = build_model(runtime);
+                        model = rebuild(&shell);
                         previous_states = model.states;
                         dirty = true;
                     }
@@ -358,7 +367,7 @@ async fn run_loop(
                 // A slow draw skipped publications — the rebuild catches
                 // the frame up to the newest one.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    model = build_model(runtime);
+                    model = rebuild(&shell);
                     previous_states = model.states;
                     dirty = true;
                 }

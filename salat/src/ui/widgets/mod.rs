@@ -12,6 +12,8 @@ pub mod hr;
 pub mod kbd_hint;
 pub mod panel;
 pub mod prayer_table;
+pub mod setting_row;
 pub mod status_dot;
+pub mod stepper;
 pub mod timeline;
 pub mod too_small;

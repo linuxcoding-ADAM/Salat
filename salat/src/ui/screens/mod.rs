@@ -54,7 +54,9 @@ pub fn render(
             notif_settings::render(model, &shell.notif, area, buf, theme, breakpoint)
         }
         Screen::Location => location::render(model, &shell.location, area, buf, theme, breakpoint),
-        Screen::Confirm => confirm::render(area, buf, theme, breakpoint),
+        Screen::Confirm { path, recalculated } => {
+            confirm::render(path, *recalculated, area, buf, theme)
+        }
         Screen::Error(error) => error::render(error, area, buf, theme, breakpoint),
         Screen::Loading => loading::render(area, buf, theme, &shell.boot, model.now, breakpoint),
         Screen::States => states::render(model, area, buf, theme, breakpoint),

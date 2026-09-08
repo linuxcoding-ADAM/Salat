@@ -15,8 +15,10 @@ use crossterm::event::{Event, KeyEventKind};
 
 use crate::app::boot::BootState;
 use crate::app::runtime::Runtime;
+use crate::config::{Config, ConfigDraft};
 use crate::domain::{Notifiable, PrayerState};
 use crate::error::SalatError;
+use crate::location::cities::CityMatch;
 use crate::scheduler::ServiceEvent;
 use crate::ui::model::UiModel;
 
@@ -40,8 +42,17 @@ pub enum Screen {
     NotifSettings,
     /// Location, pushed from Settings.
     Location,
-    /// A yes/no confirmation, pushed by saving flows.
-    Confirm,
+    /// A yes/no confirmation, pushed by saving flows. The payload is
+    /// the §16.9 dialogue's three lines of data: the real config path
+    /// (rendered with `$HOME` collapsed) and whether the save actually
+    /// changed the API cache key.
+    Confirm {
+        /// The literal path from `ConfigStore::path()`.
+        path: String,
+        /// Whether the applied configuration refetches prayer times
+        /// (`Prayer times recalculated.` vs `Settings applied.`).
+        recalculated: bool,
+    },
     /// A typed failure (§16.10) — boot errors and later flows.
     Error(SalatError),
     /// The boot screen (§16.11); never on the post-boot stack, but part
@@ -70,7 +81,7 @@ impl Screen {
             Screen::Status => "STATUS",
             Screen::NotifSettings => "NOTIFICATION SETTINGS",
             Screen::Location => "LOCATION",
-            Screen::Confirm => "SAVED",
+            Screen::Confirm { .. } => "SAVED",
             Screen::Error(_) => "ERROR",
             Screen::Loading => "INITIALIZING",
             Screen::States => "PRAYER STATE REFERENCE",
@@ -162,7 +173,7 @@ pub struct NotifState {
 /// The location editor's mode (§16.5). The search-results list arrives
 /// with Phase 11's `CityMatch` — this Phase 6 shape carries everything
 /// else.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocationMode {
     /// The city search box.
     #[default]
@@ -181,9 +192,12 @@ pub enum CoordFocus {
     Lng,
 }
 
-/// The location editor's full interactive state (§15.1, minus the
-/// Phase 11 results list).
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// The location editor's full interactive state (§15.1). `results` is
+/// the live search list (§9.2's top three); `auto` is AUTO-DETECT's
+/// proposal, computed once on entering that mode — `Ok` with the
+/// zone's largest city, `Err` with E103's inline wording. No `Eq`:
+/// `CityMatch` carries `f64` coordinates.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct LocationState {
     pub mode: LocationMode,
     pub query: String,
@@ -191,6 +205,8 @@ pub struct LocationState {
     pub lat_buf: String,
     pub lng_buf: String,
     pub focus: CoordFocus,
+    pub results: Vec<CityMatch>,
+    pub auto: Option<Result<CityMatch, String>>,
 }
 
 /// The status log's scroll position.
@@ -212,6 +228,11 @@ pub struct Shell {
     pub notif: NotifState,
     pub location: LocationState,
     pub status: StatusState,
+    /// The settings draft (§8.5): opened by the first edit on any
+    /// settings screen, mutated by every edit after, committed only by
+    /// save, discarded by Esc at the SETTINGS root. `None` until a
+    /// settings screen is first touched.
+    pub draft: Option<ConfigDraft>,
     /// The boot that produced the running `Runtime` — `done()` once
     /// the main loop starts.
     pub boot: BootState,
@@ -236,6 +257,7 @@ impl Shell {
             notif: NotifState::default(),
             location: LocationState::default(),
             status: StatusState::default(),
+            draft: None,
             boot: BootState::done(),
         }
     }
@@ -279,6 +301,16 @@ impl Shell {
     /// Show or clear the floating overlay.
     pub fn set_overlay(&mut self, overlay: Option<Overlay>) {
         self.overlay = overlay;
+    }
+
+    /// Open the settings draft if none is open (§8.5): the first edit
+    /// on any settings screen starts from the live config, and a draft
+    /// already in flight keeps its edits — walking SETTINGS → LOCATION
+    /// and back must not reset the half-edited state.
+    pub fn open_draft(&mut self, config: &Config) {
+        if self.draft.is_none() {
+            self.draft = Some(ConfigDraft::from(config));
+        }
     }
 
     /// One scheduler publication (§15.2's `svc_rx` arm). A fired

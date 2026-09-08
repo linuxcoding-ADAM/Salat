@@ -21,7 +21,7 @@
 //! later calls [`Runtime::block_on`] for its event loops.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock, RwLockWriteGuard, Weak};
 
 use async_trait::async_trait;
@@ -36,7 +36,7 @@ use crate::app::lock::{self, Acquisition, LockFile, LockGuard};
 use crate::audio::{AudioSink, Player};
 use crate::cache::{CacheError, Store, cache_key};
 use crate::cli::Cli;
-use crate::config::{Config, ConfigStore, resolve};
+use crate::config::{Config, ConfigDraft, ConfigStore, resolve};
 use crate::domain::{
     EventKind, Notifiable, PrayerWindow, ScheduledEvent, day_summary, plan_events,
 };
@@ -62,6 +62,17 @@ fn recover<T: Clone>(lock: &RwLock<T>) -> T {
 /// The write-side counterpart of [`recover`].
 fn recover_mut<'a, T>(lock: &'a RwLock<T>) -> RwLockWriteGuard<'a, T> {
     lock.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// §8.5/§16.9's save result: what the CONFIRM screen says. The design
+/// always prints `Prayer times recalculated.`; this carries whether
+/// that is *true* — the API cache key changed — so the screen can say
+/// `Settings applied.` instead of claiming work that did not happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveOutcome {
+    /// Whether the save changed the API cache key — a refetch (and
+    /// therefore a recalculation) follows.
+    pub recalculated: bool,
 }
 
 /// Every service handle, wired and warm (§15.1). Constructed only by
@@ -411,6 +422,36 @@ impl Runtime {
     /// The effective configuration (§8.5's publication).
     pub fn config(&self) -> Arc<Config> {
         recover(&self.config)
+    }
+
+    /// The store's configuration file — the literal path the CONFIRM
+    /// screen shows (§16.9 item 6).
+    pub fn config_path(&self) -> &Path {
+        self.config_store.path()
+    }
+
+    /// §8.5's save: promote the draft through the store — validate,
+    /// write atomically, publish. The publication is the propagation:
+    /// the event loop's `cfg_rx` arm (or `on_config_change` directly)
+    /// applies it, the scheduler's own receiver re-arms, exactly the
+    /// path a SIGHUP takes. [`SaveOutcome::recalculated`] is the honest
+    /// §16.9 line — the API cache key changed, so the applied
+    /// configuration will refetch; it is decided by comparing keys,
+    /// not by claiming a recalculation that may not have happened.
+    pub fn save_draft(&self, draft: &ConfigDraft) -> Result<SaveOutcome, SalatError> {
+        let old_key = {
+            let config = self.config();
+            cache_key(&Params::from_parts(&config.location, &config.calculation))
+        };
+        let mut config = (*self.config()).clone();
+        draft.apply_to(&mut config);
+        let new_key = cache_key(&Params::from_parts(&config.location, &config.calculation));
+        self.config_store
+            .save(&config)
+            .map_err(|error| error.into_salat_error(self.config_store.path()))?;
+        Ok(SaveOutcome {
+            recalculated: old_key != new_key,
+        })
     }
 
     /// The served window (§7.6).
@@ -1379,6 +1420,84 @@ mod tests {
                 .map(|c| (c.health, c.detail.clone())),
             Some((Health::Down, "INVALID".to_owned()))
         );
+    }
+
+    /// §8.5's save: `save_draft` writes the file, publishes through the
+    /// watch, and reports a recalculation when the API cache key moved —
+    /// a location change moves it. The propagation itself is the event
+    /// loop's `cfg_rx` arm, exactly the SIGHUP path, so this test drives
+    /// `on_config_change` the way the loop would.
+    #[test]
+    fn saving_a_draft_writes_publishes_and_recalculates() {
+        let fixture = testing::snapshot_runtime();
+        let mut draft = ConfigDraft::from(fixture.runtime.config().as_ref());
+        draft.working().location.label = "Mecca".to_owned();
+        draft.working().location.latitude = 21.42;
+        draft.working().location.longitude = 39.83;
+
+        let outcome = fixture
+            .runtime
+            .save_draft(&draft)
+            .expect("a valid draft saves");
+
+        assert!(
+            outcome.recalculated,
+            "a location change moves the cache key"
+        );
+        // The file on disk holds the draft — parsed back, not assumed.
+        let written = ConfigStore::new(fixture.config_path())
+            .load()
+            .expect("save_draft wrote a parseable file");
+        assert_eq!(written.location.label, "Mecca");
+        assert_eq!(written.location.latitude, 21.42);
+        // The publication reached the runtime — the loop's arm applies.
+        fixture.runtime.block_on(fixture.runtime.on_config_change());
+        assert_eq!(fixture.runtime.config().location.label, "Mecca");
+    }
+
+    /// A display-only edit still saves and publishes, but the cache key
+    /// did not move — [`SaveOutcome::recalculated`] is false, so the
+    /// CONFIRM screen says `Settings applied.`, not the design's
+    /// unconditional (and, here, untrue) recalculation line.
+    #[test]
+    fn a_display_only_save_does_not_recalculate() {
+        let fixture = testing::snapshot_runtime();
+        let mut draft = ConfigDraft::from(fixture.runtime.config().as_ref());
+        draft.working().adhan.volume = 40;
+
+        let outcome = fixture
+            .runtime
+            .save_draft(&draft)
+            .expect("a valid draft saves");
+
+        assert!(!outcome.recalculated, "volume is not part of the query");
+        fixture.runtime.block_on(fixture.runtime.on_config_change());
+        assert_eq!(fixture.runtime.config().adhan.volume, 40);
+    }
+
+    /// §8.5's failure row: a draft the validator rejects never reaches
+    /// the file — E201, the disk holds the old configuration, and the
+    /// running configuration is untouched.
+    #[test]
+    fn an_invalid_draft_is_rejected_and_the_file_survives() {
+        let fixture = testing::snapshot_runtime();
+        let before = std::fs::read_to_string(fixture.config_path())
+            .expect("the fixture wrote a config file");
+        let mut draft = ConfigDraft::from(fixture.runtime.config().as_ref());
+        draft.working().calculation.method = 999; // not whitelisted (§7.4)
+
+        let error = fixture
+            .runtime
+            .save_draft(&draft)
+            .expect_err("an unwhitelisted method is rejected");
+
+        assert_eq!(error.code(), "E201");
+        assert_eq!(
+            std::fs::read_to_string(fixture.config_path()).expect("the file still reads"),
+            before,
+            "validation happens before the write"
+        );
+        assert_eq!(fixture.runtime.config().calculation.method, 12);
     }
 
     /// `Fixture`'s own contract: the temp file exists and holds the

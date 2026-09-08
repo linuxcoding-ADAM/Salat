@@ -1,0 +1,24 @@
+---
+source: salat/src/ui/screens/settings.rs
+expression: text
+---
+  SETTINGS                            ↑↓ move · ENTER select · S save · ESC back
+╭─ GENERAL ────────────────────────────────────────────────────────────────────╮
+│▌› Location                                                   Sétif, Algeria ↵│
+│   Calculation method                                    Union of Islamic Orgs│
+│   Time format                                                             24h│
+│   Language                                                            English│
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ NOTIFICATIONS ──────────────────────────────────────────────────────────────╮
+│   Enable notifications                                              ENABLED ↵│
+│   Per-prayer timing                                              CONFIGURED ↵│
+│   Mosque reminder                                                     ENABLED│
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ ADHAN ──────────────────────────────────────────────────────────────────────╮
+│   Enable adhan                                                        ENABLED│
+│   Sound preset                                                    Abdul Basit│
+│   Volume                                                                  80%│
+│   Test adhan                                                       [ PLAY ] ↵│
+╰─────────────────────────────────────────────────────────────────────────────▼╯
+                                                                                
+                            [S] SAVE   [ESC] CANCEL

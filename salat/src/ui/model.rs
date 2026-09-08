@@ -66,6 +66,19 @@ pub struct UiModel {
     pub breakpoint: Breakpoint,
 }
 
+impl UiModel {
+    /// The configuration the settings screens render and edit: the
+    /// draft's working copy while a draft is open (§8.5 — half-made
+    /// edits stay visible walking between settings screens), the
+    /// effective config otherwise.
+    pub fn pending_config(&self) -> &Config {
+        match &self.draft {
+            Some(draft) => draft.working_ref(),
+            None => &self.config,
+        }
+    }
+}
+
 /// Fold a [`Runtime`] into a [`UiModel`] (§15.1) — the render loop's
 /// per-tick rebuild, and the only code that turns service state into
 /// renderable truth.

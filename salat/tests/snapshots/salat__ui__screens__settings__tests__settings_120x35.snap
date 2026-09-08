@@ -1,0 +1,35 @@
+---
+source: salat/src/ui/screens/settings.rs
+expression: text
+---
+  SETTINGS                                                                    ↑↓ move · ENTER select · S save · ESC back
+╭─ GENERAL ────────────────────────────────────────────────╮╭─ NOTIFICATIONS ──────────────────────────────────────────╮
+│▌› Location                               Sétif, Algeria ↵││   Enable notifications                          ENABLED ↵│
+│    36.19°N · 5.41°E                                      ││   Per-prayer timing                          CONFIGURED ↵│
+│   Calculation method                Union of Islamic Orgs││    5–15 min before                                       │
+│    Union Organization Islamic de France                  ││   Mosque reminder                                 ENABLED│
+│   Time format                                         24h││    15–30 min after                                       │
+│   Language                                        English│╰──────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────╯╭─ DISPLAY ────────────────────────────────────────────────╮
+╭─ ADHAN ──────────────────────────────────────────────────╮│   Theme                                     Midnight Blue│
+│   Enable adhan                                    ENABLED││   Compact mode                                        OFF│
+│   Sound preset                                Abdul Basit││   Show seconds                                         ON│
+│   Volume                                              80%││   Countdown progress                                   ON│
+│   Test adhan                                   [ PLAY ] ↵│╰──────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────╯                                                            
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                [S] SAVE   [ESC] CANCEL

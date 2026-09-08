@@ -30,10 +30,16 @@ tasks:
 fn main() -> ExitCode {
     let task = std::env::args().nth(1);
     match task.as_deref() {
-        Some("gen-cities") => {
-            eprintln!("xtask: gen-cities is not implemented yet (arrives with the location phase)");
-            ExitCode::from(1)
-        }
+        Some("gen-cities") => match gen_cities() {
+            Ok(report) => {
+                println!("xtask: {report}");
+                ExitCode::SUCCESS
+            }
+            Err(report) => {
+                eprintln!("xtask: {report}");
+                ExitCode::from(1)
+            }
+        },
         Some("screenshots") => {
             eprintln!("xtask: screenshots is not implemented yet (arrives in Phase 15)");
             ExitCode::from(1)
@@ -58,6 +64,262 @@ fn main() -> ExitCode {
 /// The canonical §7.2 request that captured the fixtures — the default
 /// configuration (Sétif, method 12, `Africa/Algiers`, zero tune).
 const CANONICAL_QUERY: &str = "latitude=36.19&longitude=5.41&method=12&school=0&latitudeAdjustmentMethod=3&midnightMode=0&timezonestring=Africa/Algiers&tune=0,0,0,0,0,0,0,0,0&iso8601=true";
+
+// ─── gen-cities (§9.2) ───────────────────────────────────────────────────────
+
+/// One city as it comes out of the GeoNames dump, before encoding.
+struct CityRecord {
+    name: String,
+    cc: String,
+    country: String,
+    /// Degrees, multiplied by 1e6 and rounded at encode time.
+    lat: f64,
+    lng: f64,
+    tz: String,
+    population: u32,
+}
+
+/// Regenerate `salat/assets/cities.bin` from GeoNames `cities15000.txt`
+/// (§9.2): population ≥ 15,000, country names joined from
+/// `countryInfo.txt`, one tz table, everything little-endian. The source
+/// is a local path passed as the argument, or a live download when none
+/// is — regeneration must not depend on remembering where a dump was
+/// saved.
+fn gen_cities() -> Result<String, String> {
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../salat/assets/cities.bin");
+    let (cities_source, countries_source) = sources()?;
+
+    let countries = read_country_names(&countries_source)?;
+    let mut cities = read_cities(&cities_source, &countries)?;
+    // Deterministic output regardless of the dump's own row order: sort
+    // by name then country code, so the same snapshot always encodes to
+    // the same bytes.
+    cities.sort_by(|a, b| (&a.name, &a.cc).cmp(&(&b.name, &b.cc)));
+
+    let bytes = encode(&cities);
+    // The self-check: the encoder's own accounting must equal the byte
+    // vector it produced, or the format and the writer have drifted
+    // apart.
+    let expected_len = encoded_len(&cities);
+    if bytes.len() != expected_len {
+        return Err(format!(
+            "internal: encoded {} bytes but accounted for {expected_len}",
+            bytes.len()
+        ));
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create assets/: {e}"))?;
+    }
+    std::fs::write(&out, &bytes).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    Ok(format!(
+        "{} cities · {} zones · {} bytes written to {} (§9.2)",
+        cities.len(),
+        distinct_zones(&cities),
+        bytes.len(),
+        out.display()
+    ))
+}
+
+/// Where to read the two GeoNames files from: explicit paths when given
+/// (`gen-cities <cities15000.txt> <countryInfo.txt>`), otherwise a live
+/// download into a temp directory. The dump is CC-BY 4.0 — see
+/// LICENSE-THIRD-PARTY.
+fn sources() -> Result<(PathBuf, PathBuf), String> {
+    let mut args = std::env::args().skip(2);
+    if let (Some(cities), Some(countries)) = (args.next(), args.next()) {
+        return Ok((PathBuf::from(cities), PathBuf::from(countries)));
+    }
+    let dir = std::env::temp_dir().join("salat-gen-cities");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let zip = dir.join("cities15000.zip");
+    fetch(
+        "https://download.geonames.org/export/dump/cities15000.zip",
+        &zip,
+    )?;
+    // `-p` streams the one member to stdout; the archive is never
+    // extracted next to anything it could clobber.
+    let txt = dir.join("cities15000.txt");
+    let unzip = Command::new("unzip")
+        .args([
+            "-p",
+            zip.to_str().ok_or("a non-UTF-8 temp path")?,
+            "cities15000.txt",
+        ])
+        .output()
+        .map_err(|e| format!("cannot run unzip (is it installed?): {e}"))?;
+    if !unzip.status.success() {
+        return Err(format!(
+            "unzip failed: {}",
+            String::from_utf8_lossy(&unzip.stderr).trim()
+        ));
+    }
+    std::fs::write(&txt, &unzip.stdout)
+        .map_err(|e| format!("cannot write {}: {e}", txt.display()))?;
+    let countries = dir.join("countryInfo.txt");
+    fetch(
+        "https://download.geonames.org/export/dump/countryInfo.txt",
+        &countries,
+    )?;
+    Ok((txt, countries))
+}
+
+/// Download `url` to `to`, following redirects, with a bounded wait.
+fn fetch(url: &str, to: &Path) -> Result<(), String> {
+    let output = Command::new("curl")
+        .args(["-sSL", "--max-time", "120", "-o"])
+        .arg(to)
+        .arg(url)
+        .output()
+        .map_err(|e| format!("cannot run curl: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "curl {url} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// ISO code → country name, from `countryInfo.txt`'s columns 0 and 4.
+fn read_country_names(path: &Path) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut names = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() > 4 {
+            names.insert(fields[0].to_owned(), fields[4].to_owned());
+        }
+    }
+    Ok(names)
+}
+
+/// The §9.2 city rows: name (1), latitude (4), longitude (5), country
+/// code (8), population (14), timezone (17) — keeping only population
+/// ≥ 15,000 rows that carry a timezone and a known country.
+fn read_cities(
+    path: &Path,
+    countries: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<CityRecord>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut cities = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 18 {
+            continue;
+        }
+        let population: u32 = match fields[14].parse() {
+            Ok(population) => population,
+            Err(_) => continue,
+        };
+        if population < 15_000 || fields[17].is_empty() {
+            continue;
+        }
+        let Some(country) = countries.get(fields[8]) else {
+            continue;
+        };
+        let (Ok(lat), Ok(lng)) = (fields[4].parse::<f64>(), fields[5].parse::<f64>()) else {
+            continue;
+        };
+        // The format's fixed-point and one-byte lengths must both hold:
+        // skip (not truncate) any row that would break the parser.
+        if !(-90.0..=90.0).contains(&lat)
+            || !(-180.0..=180.0).contains(&lng)
+            || fields[1].len() > u8::MAX as usize
+            || country.len() > u8::MAX as usize
+            || fields[17].len() > u8::MAX as usize
+        {
+            continue;
+        }
+        cities.push(CityRecord {
+            name: fields[1].to_owned(),
+            cc: fields[8].to_owned(),
+            country: country.clone(),
+            lat,
+            lng,
+            tz: fields[17].to_owned(),
+            population,
+        });
+    }
+    if cities.is_empty() {
+        return Err(
+            "no cities survived the population filter — the source is not a cities15000 dump"
+                .to_owned(),
+        );
+    }
+    Ok(cities)
+}
+
+/// The distinct zone count, for the report.
+fn distinct_zones(cities: &[CityRecord]) -> usize {
+    let zones: BTreeSet<&str> = cities.iter().map(|city| city.tz.as_str()).collect();
+    zones.len()
+}
+
+/// The §9.2 encoding: `SLTC` · u16 version · u32 city_count · u16
+/// tz_count, then the tz table, then the city table — all integers
+/// little-endian, the salat parser's only consumer.
+fn encode(cities: &[CityRecord]) -> Vec<u8> {
+    let zones: Vec<&str> = {
+        let set: BTreeSet<&str> = cities.iter().map(|city| city.tz.as_str()).collect();
+        set.into_iter().collect()
+    };
+    let zone_index: std::collections::BTreeMap<&str, u16> = zones
+        .iter()
+        .enumerate()
+        .map(|(index, zone)| (*zone, index as u16))
+        .collect();
+
+    let mut bytes = Vec::with_capacity(encoded_len(cities));
+    bytes.extend_from_slice(b"SLTC");
+    bytes.extend_from_slice(&VERSION.to_le_bytes());
+    bytes.extend_from_slice(&(cities.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(zones.len() as u16).to_le_bytes());
+    for zone in &zones {
+        bytes.push(zone.len() as u8);
+        bytes.extend_from_slice(zone.as_bytes());
+    }
+    for city in cities {
+        bytes.push(city.name.len() as u8);
+        bytes.extend_from_slice(city.name.as_bytes());
+        bytes.push(city.cc.len() as u8);
+        bytes.extend_from_slice(city.cc.as_bytes());
+        bytes.push(city.country.len() as u8);
+        bytes.extend_from_slice(city.country.as_bytes());
+        bytes.extend_from_slice(&e6(city.lat).to_le_bytes());
+        bytes.extend_from_slice(&e6(city.lng).to_le_bytes());
+        bytes.extend_from_slice(&zone_index[city.tz.as_str()].to_le_bytes());
+        bytes.extend_from_slice(&city.population.to_le_bytes());
+    }
+    bytes
+}
+
+/// The format version this encoder writes; bump only with a reader that
+/// understands the new shape (§8.4's rule, applied to the index too).
+const VERSION: u16 = 1;
+
+/// Degrees into the i32 fixed-point the format carries.
+fn e6(degrees: f64) -> i32 {
+    (degrees * 1e6).round() as i32
+}
+
+/// The byte count `encode` will produce — the encoder's self-check and
+/// the capacity hint share one arithmetic truth.
+fn encoded_len(cities: &[CityRecord]) -> usize {
+    let zones: BTreeSet<&str> = cities.iter().map(|city| city.tz.as_str()).collect();
+    let mut len = 4 + 2 + 4 + 2;
+    for zone in zones {
+        len += 1 + zone.len();
+    }
+    for city in cities {
+        len += 1 + city.name.len() + 1 + city.cc.len() + 1 + city.country.len() + 4 + 4 + 2 + 4;
+    }
+    len
+}
 
 /// §7.8 / §23 Phase 2 item 9, automated: one live `curl` per recorded
 /// endpoint, compared against the committed fixture. `code` and `status`

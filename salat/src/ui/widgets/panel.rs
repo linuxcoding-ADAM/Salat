@@ -21,6 +21,7 @@ pub struct Panel<'a> {
     active: bool,
     border: Option<Color>,
     background: Option<Color>,
+    title_color: Option<Color>,
 }
 
 impl Default for Panel<'_> {
@@ -37,6 +38,7 @@ impl<'a> Panel<'a> {
             active: false,
             border: None,
             background: None,
+            title_color: None,
         }
     }
 
@@ -65,6 +67,13 @@ impl<'a> Panel<'a> {
         self
     }
 
+    /// A title colour override — the design's `titleCol` (the
+    /// prayer-config panel's green title over its `borderGrn` box).
+    pub fn title_color(mut self, color: Color) -> Self {
+        self.title_color = Some(color);
+        self
+    }
+
     /// Draw the box and return its interior.
     pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Rect {
         let border_color = if self.active {
@@ -77,15 +86,17 @@ impl<'a> Panel<'a> {
             .border_style(Style::new().fg(border_color));
         if let Some(title) = self.title {
             // `╭─ TITLE ` — the dashes inherit the border colour, the
-            // title is textSub (the design's `titleCol` default).
-            block = block.title_top(
-                Line::from(vec![
-                    Span::raw("─ "),
-                    Span::styled(title, Style::new().fg(theme.text_sub)),
-                    Span::raw(" "),
-                ])
-                .style(Style::new().fg(border_color)),
-            );
+            // title the design's `titleCol` (`textSub` by default).
+            // Each span carries its own colour: a line-level style
+            // would override them.
+            block = block.title_top(Line::from(vec![
+                Span::styled("─ ", Style::new().fg(border_color)),
+                Span::styled(
+                    title,
+                    Style::new().fg(self.title_color.unwrap_or(theme.text_sub)),
+                ),
+                Span::styled(" ", Style::new().fg(border_color)),
+            ]));
         }
         let inner = block.inner(area);
         block.render(area, buf);
@@ -169,5 +180,24 @@ mod tests {
             .background(theme.red_bg)
             .render(Rect::new(0, 0, 10, 4), &mut buf, &theme);
         assert_eq!(buf[(1, 1)].style().bg, Some(theme.red_bg));
+    }
+
+    /// The title defaults to `textSub` and the override wins — the
+    /// prayer-config panel's green title over a `borderGrn` box.
+    #[test]
+    fn the_title_colour_overrides_the_default() {
+        let theme = Theme::for_mode(crate::ui::theme::RenderMode::Truecolor);
+        let mut buf = buffer(14, 3);
+        Panel::new()
+            .title("MAGHRIB · 19:21")
+            .border(theme.border_grn)
+            .title_color(theme.green)
+            .render(Rect::new(0, 0, 14, 3), &mut buf, &theme);
+        // The title starts after `╭─ ` — the corner, the dash, a
+        // border-coloured space — so its first glyph is at column 3.
+        assert_eq!(buf[(3, 0)].symbol(), "M");
+        assert_eq!(buf[(3, 0)].style().fg, Some(theme.green));
+        assert_eq!(buf[(0, 0)].style().fg, Some(theme.border_grn));
+        assert_eq!(buf[(1, 0)].style().fg, Some(theme.border_grn));
     }
 }

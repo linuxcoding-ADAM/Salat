@@ -1,0 +1,20 @@
+---
+source: salat/src/ui/screens/confirm.rs
+expression: text
+---
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                ╭─ SAVED ──────────────────────────────────────╮                
+                │                                              │                
+                │                      ✓                       │                
+                │                SETTINGS SAVED                │                
+                │         ~/.config/salat/config.toml          │                
+                │          Prayer times recalculated.          │                
+                │                                              │                
+                │               [ENTER] CONTINUE               │                
+                ╰──────────────────────────────────────────────╯

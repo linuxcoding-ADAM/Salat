@@ -1,0 +1,24 @@
+---
+source: salat/src/ui/screens/notif_settings.rs
+expression: text
+---
+  SETTINGS › NOTIFICATIONS                          ↑↓ row · TAB col · ←→ adjust
+╭─ PER-PRAYER TIMING ──────────────────────────────────────────────────────────╮
+│    PRAYER              BEFORE                            AFTER               │
+│──────────────────────────────────────────────────────────────────────────────│
+│  ▌▶ FAJR             ◂ 15 min ▸                       ◂ 20 min ▸             │
+│     DHUHR            ◂ 10 min ▸                       ◂ 30 min ▸             │
+│     ASR              ◂ 15 min ▸                       ◂ 20 min ▸             │
+│     MAGHRIB           ◂ 5 min ▸                       ◂ 15 min ▸             │
+│     ISHA             ◂ 15 min ▸                       ◂ 30 min ▸             │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ TIMELINE PREVIEW ───────────────────────────────────────────────────────────╮
+│FAJ     ◆─15m─◉ adhan─20m─◉ mosque                                            │
+│DHU     ◆─10m─◉ adhan─30m─◉ mosque                                            │
+│ASR     ◆─15m─◉ adhan─20m─◉ mosque                                            │
+│MAG     ◆─5m─◉ adhan─15m─◉ mosque                                             │
+│ISH     ◆─15m─◉ adhan─30m─◉ mosque                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                            [S] SAVE   [ESC] CANCEL

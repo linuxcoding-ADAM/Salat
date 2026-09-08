@@ -23,7 +23,7 @@ pub mod config;
 pub mod api;
 pub mod audio;
 pub mod domain;
-mod location;
+pub mod location;
 pub mod notify;
 pub mod scheduler;
 pub mod service;

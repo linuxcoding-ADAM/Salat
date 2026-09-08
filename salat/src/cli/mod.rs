@@ -14,8 +14,12 @@ use clap::{ArgAction, Parser, Subcommand};
 
 use crate::error::{ExitCode, SalatError};
 
-/// Shown after `--help`: the data attribution the brief requires.
-pub const ATTRIBUTION: &str = "Prayer times by AlAdhan — https://aladhan.com";
+/// Shown after `--help`: the data attribution the brief requires —
+/// AlAdhan for prayer times, GeoNames for the embedded city index
+/// (§9.2's three attribution surfaces: here, README, and
+/// LICENSE-THIRD-PARTY).
+pub const ATTRIBUTION: &str = "Prayer times by AlAdhan — https://aladhan.com\n\
+     City data by GeoNames — https://www.geonames.org (CC BY 4.0)";
 
 /// The parsed command line (§14.2). `Clone` because the full TUI's
 /// boot thread takes its own copy (§16.11).

@@ -1,0 +1,24 @@
+---
+source: salat/src/ui/screens/prayer_config.rs
+expression: text
+---
+  SETTINGS › PRAYER CONFIGURATION        ←→ tab · ESC back · presets in SETTINGS
+  FAJ    DHU    ASR  ▸ MAG    ISH                                               
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔─────────────────────────────────────────────
+╭─ MAGHRIB · 19:21 ────────────────────────────────────────────────────────────╮
+│   Before Adhan notification        ◂ 5 min ▸                                 │
+│   After Adhan mosque remind       ◂ 15 min ▸                                 │
+│──────────────────────────────────────────────────────────────────────────────│
+│   Adhan sound                                                         ENABLED│
+│   Notifications                                                       ENABLED│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ NOTIFICATION TIMELINE ──────────────────────────────────────────────────────╮
+│                                                                              │
+│ ─5m─ ◆ NOTIFY ──────── ◉ ADHAN 19:21 ──────── ◉ MOSQUE ─+15m                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                            [S] SAVE   [ESC] CANCEL

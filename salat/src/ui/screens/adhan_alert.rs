@@ -537,7 +537,7 @@ fn bold_row(area: Rect, y: u16, buf: &mut Buffer, color: Color, text: &str) -> u
 
 /// The preset's display form (§16.7 item 6's `Abdul Basit`): the kebab
 /// case becomes Title Case.
-fn preset_display(preset: &str) -> String {
+pub(crate) fn preset_display(preset: &str) -> String {
     preset
         .split(['-', '_'])
         .map(|word| {

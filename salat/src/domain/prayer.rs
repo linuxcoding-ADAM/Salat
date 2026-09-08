@@ -123,6 +123,19 @@ impl Notifiable {
             Notifiable::Isha => &prayers.isha,
         }
     }
+
+    /// The mutable side of [`Notifiable::settings`] — the settings
+    /// screens' draft edits go through the same mapping, so the read
+    /// and write paths can never disagree about which field is whose.
+    pub fn settings_mut<'a>(&self, prayers: &'a mut PrayersConfig) -> &'a mut PrayerSettings {
+        match self {
+            Notifiable::Fajr => &mut prayers.fajr,
+            Notifiable::Dhuhr => &mut prayers.dhuhr,
+            Notifiable::Asr => &mut prayers.asr,
+            Notifiable::Maghrib => &mut prayers.maghrib,
+            Notifiable::Isha => &mut prayers.isha,
+        }
+    }
 }
 
 impl From<Notifiable> for Prayer {
