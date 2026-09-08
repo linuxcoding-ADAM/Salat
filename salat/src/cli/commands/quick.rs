@@ -34,7 +34,12 @@ use crate::config::resolve;
 use crate::domain::Notifiable;
 use crate::error::{ExitCode, SalatError};
 use crate::status::{ComponentId, Health};
+use crate::ui::input::snooze_source;
+use crate::ui::input::stop_audio;
 use crate::ui::model::{UiModel, build_model};
+use crate::ui::screens::adhan_alert;
+use crate::ui::screens::mosque_reminder;
+use crate::ui::shell::{Overlay, overlay_from, overlay_from_transition};
 use crate::ui::theme::{Theme, hhmm, quick_name};
 use crate::ui::widgets::bar;
 use crate::ui::widgets::hr;
@@ -522,19 +527,39 @@ pub(crate) fn frame_to_string(buf: &Buffer, colored: bool) -> String {
 
 // ─────────────────────────     live view        ─────────────────────────
 
-/// What a key event means to the quick loop (§16.14 item 7).
+/// What a key event means to the quick loop (§16.14 item 7), with the
+/// §16.15 overlay vocabulary folded in: while an inline overlay is up
+/// `q` is swallowed and `Esc` dismisses it instead of quitting — the
+/// second `Esc`, with no overlay, is the quit.
 enum KeyAction {
     Quit,
     Redraw,
+    /// An overlay key: the §13.6 audio lifetime (Enter stops, `s` stops
+    /// and re-arms, Esc leaves the audio playing) plus the dismissal
+    /// itself. The loop applies it; the key never reaches the quit arm.
+    Overlay(Overlay),
     Ignore,
 }
 
-fn key_action(event: &Event) -> KeyAction {
+fn key_action(event: &Event, overlay: Option<Overlay>) -> KeyAction {
     let Event::Key(key) = event else {
         return KeyAction::Ignore;
     };
     if key.kind != KeyEventKind::Press {
         return KeyAction::Ignore; // §15.4: Press only
+    }
+    if let Some(overlay) = overlay {
+        // The overlay swallows everything but its own three keys and
+        // Ctrl-C (§15.4 step 1 outranks it) — `q` included, so an
+        // accidental quit never dismisses a call to prayer.
+        return match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => KeyAction::Quit,
+            (KeyCode::Char('l'), KeyModifiers::CONTROL) => KeyAction::Redraw,
+            (KeyCode::Enter, _) | (KeyCode::Char('s'), _) | (KeyCode::Esc, _) => {
+                KeyAction::Overlay(overlay)
+            }
+            _ => KeyAction::Ignore,
+        };
     }
     match (key.code, key.modifiers) {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => KeyAction::Quit,
@@ -586,8 +611,10 @@ pub fn run_live(cli: &Cli) -> Result<ExitCode, SalatError> {
 
 /// §15.2's loop with Phase 8's arms: events, the 250 ms tick (with the
 /// rollover check), the configuration watch, the signals channel, and
-/// the scheduler's `svc_rx` — a fired or missed event is a reason to
-/// repaint. Drawing is on demand, capped at 20 Hz.
+/// the scheduler's `svc_rx`. A fired `Adhan` or `MosqueReminder` raises
+/// the §16.15 inline overlay, which then owns the cleared viewport
+/// until Enter, `s` or Esc dismisses it (§13.6). Drawing is on
+/// demand, capped at 20 Hz.
 async fn run_loop(
     runtime: &Runtime,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -601,17 +628,46 @@ async fn run_loop(
 
     let mut model = build_model(runtime);
     let mut theme = *theme;
+    let mut previous_states = model.states;
     let mut last_draw = Instant::now();
     let mut dirty = true;
+    let mut overlay: Option<Overlay> = None;
 
     loop {
         tokio::select! {
             event = events.next() => match event {
-                Some(Ok(event)) => match key_action(&event) {
+                Some(Ok(event)) => match key_action(&event, overlay) {
                     KeyAction::Quit => break,
                     KeyAction::Redraw => {
                         terminal.clear().map_err(term_io)?;
                         dirty = true;
+                    }
+                    KeyAction::Overlay(over) => {
+                        // §16.15's key semantics: Enter dismisses and
+                        // stops (§13.6 DISMISS), `s` dismisses, stops
+                        // and re-arms the alarm (§11.7), Esc dismisses
+                        // without stopping — the audio plays to its end.
+                        match event {
+                            Event::Key(ref key) if key.code == KeyCode::Enter => {
+                                overlay = None;
+                                stop_audio(runtime).await;
+                                dirty = true;
+                            }
+                            Event::Key(ref key) if key.code == KeyCode::Char('s') => {
+                                let source = snooze_source(over);
+                                overlay = None;
+                                stop_audio(runtime).await;
+                                if let Some(source) = source {
+                                    runtime.snooze(source).await;
+                                }
+                                dirty = true;
+                            }
+                            Event::Key(ref key) if key.code == KeyCode::Esc => {
+                                overlay = None;
+                                dirty = true;
+                            }
+                            _ => {}
+                        }
                     }
                     KeyAction::Ignore => {
                         // A resize needs no handler (§15.2 decision 3);
@@ -628,7 +684,20 @@ async fn run_loop(
             },
             _ = tick.tick() => {
                 runtime.refresh_on_rollover().await;
-                model = build_model(runtime);
+                let rebuilt = build_model(runtime);
+                // §16.7 item 3's transition path. In observer mode it
+                // is the only alarm (the daemon owns the fire); in
+                // owner mode it is the §10.1 backstop — `adhan = false`
+                // mutes the event, not the visual alarm — subordinated
+                // to the broadcast through `raise_transition` so a
+                // late fire keeps its `(delayed)` wording.
+                if let Some(raised) =
+                    overlay_from_transition(&previous_states, &rebuilt.states, &rebuilt)
+                {
+                    overlay = crate::ui::shell::raise_transition(overlay, raised);
+                }
+                previous_states = rebuilt.states;
+                model = rebuilt;
                 dirty = true;
             }
             changed = cfg_rx.changed() => {
@@ -637,6 +706,7 @@ async fn run_loop(
                     // publication, so this applies rather than waits.
                     runtime.on_config_change().await;
                     model = build_model(runtime);
+                    previous_states = model.states;
                     theme = Theme::from(&model.config.display);
                     dirty = true;
                 }
@@ -648,12 +718,22 @@ async fn run_loop(
                 Some(_) => runtime.reload_config().await,
                 None => {}
             },
-            // A fired or missed event (§15.2's svc_rx): repaint — the
-            // countdown and next-event derive from the model, and the
-            // overlays quick mode does not have are Phase 10's.
+            // A fired or missed event (§15.2's svc_rx): a fire raises
+            // the inline overlay through the same mapping the full
+            // TUI's shell uses (§16.7 item 3); everything else is a
+            // repaint, the Phase 8 behaviour.
             service = svc_rx.recv() => match service {
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                Ok(event) => {
+                    if let Some(raised) = overlay_from(&event) {
+                        overlay = Some(raised);
+                    }
                     model = build_model(runtime);
+                    previous_states = model.states;
+                    dirty = true;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    model = build_model(runtime);
+                    previous_states = model.states;
                     dirty = true;
                 }
                 // Never closed: the runtime holds the sender.
@@ -664,6 +744,21 @@ async fn run_loop(
         if dirty && last_draw.elapsed() >= Duration::from_millis(50) {
             terminal
                 .draw(|frame| {
+                    // §16.15: while an overlay is up it owns the whole
+                    // viewport — header cleared, inline layout drawn.
+                    if let Some(overlay) = overlay {
+                        let area = frame.area();
+                        let buf = frame.buffer_mut();
+                        match overlay {
+                            Overlay::AdhanAlert { .. } => {
+                                adhan_alert::render_inline(overlay, &model, area, buf, &theme);
+                            }
+                            Overlay::MosqueReminder { .. } => {
+                                mosque_reminder::render_inline(overlay, &model, area, buf, &theme);
+                            }
+                        }
+                        return;
+                    }
                     render_quick(&model, frame.area(), frame.buffer_mut(), &theme);
                 })
                 .map_err(term_io)?;
@@ -1056,7 +1151,9 @@ mod tests {
     }
 
     /// §16.14 item 7's keys: q, Esc and Ctrl-C quit, Ctrl-L redraws,
-    /// and only `Press` events count (§15.4).
+    /// and only `Press` events count (§15.4). §16.15's overlay rules
+    /// fold in: with an overlay up `q` is swallowed, Esc dismisses,
+    /// Enter and `s` are overlay keys.
     #[test]
     fn key_actions_follow_the_design() {
         let key = |code: KeyCode, modifiers: KeyModifiers| {
@@ -1068,23 +1165,23 @@ mod tests {
             })
         };
         assert!(matches!(
-            key_action(&key(KeyCode::Char('q'), KeyModifiers::NONE)),
+            key_action(&key(KeyCode::Char('q'), KeyModifiers::NONE), None),
             KeyAction::Quit
         ));
         assert!(matches!(
-            key_action(&key(KeyCode::Esc, KeyModifiers::NONE)),
+            key_action(&key(KeyCode::Esc, KeyModifiers::NONE), None),
             KeyAction::Quit
         ));
         assert!(matches!(
-            key_action(&key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            key_action(&key(KeyCode::Char('c'), KeyModifiers::CONTROL), None),
             KeyAction::Quit
         ));
         assert!(matches!(
-            key_action(&key(KeyCode::Char('l'), KeyModifiers::CONTROL)),
+            key_action(&key(KeyCode::Char('l'), KeyModifiers::CONTROL), None),
             KeyAction::Redraw
         ));
         assert!(matches!(
-            key_action(&key(KeyCode::Char('x'), KeyModifiers::NONE)),
+            key_action(&key(KeyCode::Char('x'), KeyModifiers::NONE), None),
             KeyAction::Ignore
         ));
 
@@ -1092,7 +1189,59 @@ mod tests {
         if let Event::Key(ref mut event) = release {
             event.kind = KeyEventKind::Release;
         }
-        assert!(matches!(key_action(&release), KeyAction::Ignore));
+        assert!(matches!(key_action(&release, None), KeyAction::Ignore));
+
+        // With an overlay up: q and the tab digits 1–4 are swallowed,
+        // Ctrl-C still quits, and Enter / s / Esc are the overlay's own
+        // three keys.
+        let overlay = Some(test_adhan_overlay());
+        for code in [
+            KeyCode::Char('q'),
+            KeyCode::Char('1'),
+            KeyCode::Char('2'),
+            KeyCode::Char('3'),
+            KeyCode::Char('4'),
+        ] {
+            assert!(
+                matches!(
+                    key_action(&key(code, KeyModifiers::NONE), overlay),
+                    KeyAction::Ignore
+                ),
+                "{code:?} must be swallowed while the overlay is up"
+            );
+        }
+        // §16.15: the first Esc dismisses the overlay; the *second* —
+        // with no overlay present — quits.
+        assert!(matches!(
+            key_action(&key(KeyCode::Esc, KeyModifiers::NONE), None),
+            KeyAction::Quit
+        ));
+        assert!(matches!(
+            key_action(&key(KeyCode::Char('c'), KeyModifiers::CONTROL), overlay),
+            KeyAction::Quit
+        ));
+        for code in [KeyCode::Enter, KeyCode::Char('s'), KeyCode::Esc] {
+            assert!(matches!(
+                key_action(&key(code, KeyModifiers::NONE), overlay),
+                KeyAction::Overlay(_)
+            ));
+        }
+    }
+
+    /// A payloaded overlay for the key tests — Maghrib at the
+    /// snapshot's specimen instant.
+    fn test_adhan_overlay() -> Overlay {
+        use chrono::TimeZone;
+        let zone: chrono_tz::Tz = chrono_tz::Africa::Algiers;
+        let at = zone
+            .with_ymd_and_hms(2026, 9, 5, 19, 21, 0)
+            .single()
+            .expect("the specimen instant exists");
+        Overlay::AdhanAlert {
+            prayer: Notifiable::Maghrib,
+            at,
+            late: false,
+        }
     }
 
     /// §14.6's five golden files and §20's three snapshots — the

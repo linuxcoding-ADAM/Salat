@@ -127,6 +127,15 @@ impl SchedulerHandle {
         let _ = self.cmd_tx.send(Command::Snooze { source }).await;
     }
 
+    /// An owned queue for §11.7 snoozes — the runtime forwards the
+    /// overlay's `s` press without holding its scheduler read guard
+    /// across the send's await.
+    pub(crate) fn snooze_sender(&self) -> SnoozeSender {
+        SnoozeSender {
+            cmd_tx: self.cmd_tx.clone(),
+        }
+    }
+
     /// Subscribe to the service events the UI's `svc_rx` arm selects
     /// on (§15.2).
     pub fn subscribe(&self) -> broadcast::Receiver<ServiceEvent> {
@@ -137,6 +146,21 @@ impl SchedulerHandle {
     pub async fn shutdown(self) {
         let _ = self.cmd_tx.send(Command::Shutdown).await;
         let _ = self.task.await;
+    }
+}
+
+/// A cloned snooze queue (see [`SchedulerHandle::snooze_sender`]) —
+/// `Runtime::snooze` holds its read guard only for the clone, never
+/// across an await.
+pub(crate) struct SnoozeSender {
+    cmd_tx: mpsc::Sender<Command>,
+}
+
+impl SnoozeSender {
+    /// Queue one snooze — same command as
+    /// [`SchedulerHandle::snooze`], same "latest wins" semantics.
+    pub async fn snooze(&self, source: ScheduledEvent) {
+        let _ = self.cmd_tx.send(Command::Snooze { source }).await;
     }
 }
 
@@ -167,6 +191,16 @@ struct Runner {
 enum Discharge {
     Done,
     Retry,
+}
+
+/// Which call site discharged an event (§11.5): the live tick — the
+/// TUI was already running, so an overlay may be raised — or the
+/// startup catch-up, which never raises one. The scheduler knows the
+/// difference because they are different call sites; no new state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FireOrigin {
+    Live,
+    Catchup,
 }
 
 impl Runner {
@@ -257,7 +291,7 @@ impl Runner {
         }
 
         // Fire every due event, oldest first (§11.3).
-        self.judge_due(now).await;
+        self.judge_due(now, FireOrigin::Live).await;
 
         // Replan when the served window changed (a config-change or
         // rollover refresh handed back a new one) or when asked.
@@ -288,7 +322,7 @@ impl Runner {
 
     /// Judge and fire every due event of the plan and the snoozes,
     /// oldest first, through the one §11.5 decision.
-    async fn judge_due(&mut self, now: DateTime<Tz>) {
+    async fn judge_due(&mut self, now: DateTime<Tz>, origin: FireOrigin) {
         let mut due: Vec<ScheduledEvent> = self
             .plan
             .iter()
@@ -300,7 +334,7 @@ impl Runner {
 
         let mut discharged: Vec<ScheduledEvent> = Vec::new();
         for event in due {
-            match self.fire_once(&event, now).await {
+            match self.fire_once(&event, now, origin).await {
                 Discharge::Done => discharged.push(event),
                 Discharge::Retry => tracing::warn!(
                     kind = ?event.kind,
@@ -315,7 +349,12 @@ impl Runner {
     }
 
     /// One event, one decision, every side effect in order (§11.4–§11.5).
-    async fn fire_once(&mut self, event: &ScheduledEvent, now: DateTime<Tz>) -> Discharge {
+    async fn fire_once(
+        &mut self,
+        event: &ScheduledEvent,
+        now: DateTime<Tz>,
+        origin: FireOrigin,
+    ) -> Discharge {
         let decision = match catchup::decide(&self.deps.scope, event, now, &self.deps.store).await {
             Ok(decision) => decision,
             Err(error) => {
@@ -356,10 +395,18 @@ impl Runner {
                     tracing::error!(%error, "the fired event-log row failed after the ledger insert");
                 }
                 self.deps.sink.on_event(*event, late).await;
-                let _ = self.deps.events.send(ServiceEvent::Fired {
-                    event: *event,
-                    late,
-                });
+                // §11.5's overlay rule: an overlay is raised only if the
+                // TUI was already running when the event fired. A
+                // catch-up fire writes its ledger row, sends the
+                // notification and plays its audio, then leaves the UI
+                // alone — the dashboard renders the prayer in its
+                // post-adhan state and the event log says `(delayed)`.
+                if origin == FireOrigin::Live {
+                    let _ = self.deps.events.send(ServiceEvent::Fired {
+                        event: *event,
+                        late,
+                    });
+                }
                 if event.kind == EventKind::DayRollover {
                     tracing::info!("day rollover — refetching the window and replanning");
                     self.deps.windows.rollover().await;
@@ -444,7 +491,7 @@ impl Runner {
         self.last_wall = Some(self.deps.clock.now_utc());
         self.last_mono = Some(self.deps.clock.now_monotonic());
 
-        self.judge_due(now).await;
+        self.judge_due(now, FireOrigin::Catchup).await;
 
         // Everything due was judged; keep only the forward plan.
         self.plan.retain(|event| event.fire_at > now);

@@ -21,7 +21,7 @@ pub mod cache;
 pub mod config;
 
 pub mod api;
-mod audio;
+pub mod audio;
 pub mod domain;
 mod location;
 pub mod notify;

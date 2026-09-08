@@ -31,4 +31,4 @@ expression: "text(&rendered(width, height))"
 │                                           ││                                                     │
 │                                           ││                                                     │
 ╰───────────────────────────────────────────╯╰─────────────────────────────────────────────────────╯
-● service │ ○ notifications │ ○ adhan │ ○ audio
+● service │ ● notifications │ ● adhan │ ● audio

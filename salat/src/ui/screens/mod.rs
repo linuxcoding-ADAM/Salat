@@ -2,8 +2,8 @@
 //! [`loading`] and [`states`] screens fully, [`error`] minimally (boot
 //! failures — Phase 12 completes it), and every other module as a
 //! title-only placeholder body whose phase replaces it: dashboard and
-//! status (Phase 7), settings + notif + location (Phase 11), confirm
-//! (Phase 11), the overlays (Phase 10).
+//! status (Phase 7), the overlays (Phase 10), settings + notif +
+//! location + confirm (Phase 11).
 
 pub mod adhan_alert;
 pub mod confirm;
@@ -62,21 +62,21 @@ pub fn render(
 }
 
 /// Render an overlay over the whole frame (§3.3: no header, no
-/// footer). Phase 6 draws the placeholder body; Phase 10 replaces it
-/// with the real overlay layouts.
+/// footer). §16.7's full-screen Adhan wash and §16.8's centered
+/// mosque panel — the shell raised one from a scheduler fire and the
+/// frame is rebuilt from the payload alone.
 pub fn render_overlay(
     overlay: Overlay,
-    _model: &UiModel,
+    model: &UiModel,
     _shell: &Shell,
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
 ) {
-    let title = match overlay {
-        Overlay::AdhanAlert => adhan_alert::TITLE,
-        Overlay::MosqueReminder => mosque_reminder::TITLE,
-    };
-    title_only(title, area, buf, theme);
+    match overlay {
+        Overlay::AdhanAlert { .. } => adhan_alert::render(overlay, model, area, buf, theme),
+        Overlay::MosqueReminder { .. } => mosque_reminder::render(overlay, model, area, buf, theme),
+    }
 }
 
 /// A placeholder body: the screen's design title, centered — the shape

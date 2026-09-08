@@ -1,0 +1,23 @@
+---
+source: salat/src/ui/screens/mosque_reminder.rs
+expression: text(buf)
+---
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                  ╭─ MOSQUE REMINDER ────────────────────────────────────────────╮                  
+                  │                  ◉ ── TIME TO HEAD OUT ── ◉                  │                  
+                  │──────────────────────────────────────────────────────────────│                  
+                  │                           MAGHRIB                            │                  
+                  │               Adhan was 15 minutes ago · 19:21               │                  
+                  │              Iqama in approximately ~5 minutes               │                  
+                  │──────────────────────────────────────────────────────────────│                  
+                  │               [ENTER] DISMISS   [S] SNOOZE 5m                │                  
+                  ╰──────────────────────────────────────────────────────────────╯

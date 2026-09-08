@@ -11,4 +11,4 @@ Dhuhr    12:47  ✓ passed
 Asr      16:23  ✓ passed
 Maghrib  19:21  ● next · in 01:42:37
 Isha     20:47  ○ upcoming
-● svc  ○ notif  ○ adhan  ○ audio      Sétif, Algeria · 23 Rabīʿ al-awwal 1448 AH
+● svc  ● notif  ● adhan  ● audio      Sétif, Algeria · 23 Rabīʿ al-awwal 1448 AH

@@ -1,0 +1,7 @@
+---
+source: salat/src/ui/screens/adhan_alert.rs
+expression: text(buf)
+---
+◉ ADHAN                                                                    19:21
+                                    MAGHRIB                                     
+[ENTER] DISMISS   [S] SNOOZE 3m

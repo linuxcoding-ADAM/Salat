@@ -33,13 +33,18 @@ use crate::api::HttpClient;
 use crate::api::params::Params;
 use crate::app::clock::{Clock, SystemClock};
 use crate::app::lock::{self, Acquisition, LockFile, LockGuard};
+use crate::audio::{AudioSink, Player};
 use crate::cache::{CacheError, Store, cache_key};
 use crate::cli::Cli;
 use crate::config::{Config, ConfigStore, resolve};
-use crate::domain::{EventKind, Notifiable, PrayerWindow, day_summary, plan_events};
+use crate::domain::{
+    EventKind, Notifiable, PrayerWindow, ScheduledEvent, day_summary, plan_events,
+};
 use crate::error::SalatError;
 use crate::notify::{DesktopNotifier, NoopNotifier, Notifier, NotifySink};
-use crate::scheduler::{Scheduler, SchedulerDeps, SchedulerHandle, ServiceEvent, WindowSource};
+use crate::scheduler::{
+    EventSink, Scheduler, SchedulerDeps, SchedulerHandle, ServiceEvent, WindowSource,
+};
 use crate::service::{PrayerTimeService, ServiceError};
 use crate::status::{Component, ComponentId, Health, NextEvent, SystemStatus};
 
@@ -111,6 +116,10 @@ pub struct Runtime {
     /// `NoopNotifier` when they are not. The scheduler's sink sends
     /// through it; Phase 12's Status reads `report()`.
     notifier: Arc<dyn Notifier>,
+    /// The audio subsystem (§13) — the concrete [`Player`], probed
+    /// once at boot stage 4. Concrete (not `dyn AudioPlayer`) because
+    /// `test-adhan` asks `kind()` and Status asks for both rows.
+    audio: Arc<Player>,
     /// The §4.3 arbitration outcome for this process.
     service_owner: RwLock<ServiceOwner>,
     /// The held lock and the runner's handle — present iff
@@ -138,11 +147,11 @@ enum ServiceOwner {
 /// runner's handle, kept alive together.
 struct OwnedScheduler {
     _guard: LockGuard,
-    // `_` only until Phase 10 wires the snooze command through it —
-    // holding the handle is itself the job: it keeps the runner's
-    // command channel alive, and its drop (with the `Runtime`'s) stops
-    // the runner.
-    _handle: SchedulerHandle,
+    /// The runner's command channel — `snooze` sends through it
+    /// (§11.7), and holding the handle is itself the job: it keeps
+    /// the channel alive, and its drop (with the `Runtime`'s) stops
+    /// the runner.
+    handle: SchedulerHandle,
 }
 
 /// The wired parts [`Runtime::build`]'s async boot hands back to the
@@ -161,8 +170,27 @@ struct Boot {
     today: NaiveDate,
     qibla: Option<f64>,
     notifier: Arc<dyn Notifier>,
+    audio: Arc<Player>,
     scope: String,
     lock_path: PathBuf,
+}
+
+/// The §15.2 sink the runner actually gets: one fired event, both
+/// halves — the notification (§12) and the audio (§13). Each swallows
+/// its own failures, so neither can starve the other; the runner's
+/// event-log row and `ServiceEvent` broadcast are its own work and
+/// already landed before this runs.
+struct FanOutSink {
+    notify: NotifySink,
+    audio: AudioSink,
+}
+
+#[async_trait]
+impl EventSink for FanOutSink {
+    async fn on_event(&self, event: crate::domain::ScheduledEvent, late: bool) {
+        self.notify.on_event(event, late).await;
+        self.audio.on_event(event, late).await;
+    }
 }
 
 impl Runtime {
@@ -288,17 +316,20 @@ impl Runtime {
                 tracing::warn!(target: "salat::app", "qibla unresolved for this location");
             }
 
-            // Step 4 (index 3): Initializing audio — Phase 10's, but
-            // §12.3 hangs the notification capability probe off the
-            // same stage: one D-Bus session round-trip, never fatal,
-            // bounded by five seconds. `notifications.enabled = false`
-            // skips the probe entirely (§12.3's DISABLED row) — there
-            // is nothing to talk to.
+            // Step 4 (index 3): Initializing audio — §13.2's probe
+            // rides the same stage as §12.3's notification capability
+            // probe: one walk of `$PATH` for the four players, never
+            // fatal, no round-trip to bound (it is a filesystem walk).
+            // The D-Bus probe below it stays five-second-bounded.
+            // `notifications.enabled = false` skips that probe
+            // entirely (§12.3's DISABLED row) — there is nothing to
+            // talk to.
             on_state(crate::app::boot::BootState {
                 stage: 3,
                 error: None,
                 location: Some(label.clone()),
             });
+            let audio = Arc::new(Player::probed());
             let notifier: Arc<dyn Notifier> = if config.notifications.enabled {
                 Arc::new(DesktopNotifier::probed().await)
             } else {
@@ -334,6 +365,7 @@ impl Runtime {
                 today,
                 qibla,
                 notifier,
+                audio,
                 scope,
                 lock_path,
             })
@@ -358,6 +390,7 @@ impl Runtime {
             lock_path: boot.lock_path,
             svc_tx: broadcast::channel(64).0,
             notifier: boot.notifier,
+            audio: boot.audio,
             service_owner: RwLock::new(ServiceOwner::Standalone),
             scheduler: RwLock::new(None),
         }))
@@ -366,6 +399,13 @@ impl Runtime {
     /// The time source (§6.6) — the one callers may read "now" from.
     pub fn clock(&self) -> Arc<dyn Clock> {
         Arc::clone(&self.clock)
+    }
+
+    /// The audio player (§13.6) — owned here, never by a screen:
+    /// playback survives screen changes and resizes. `test-adhan`
+    /// and the overlay's `Enter`/`s` reach it through this handle.
+    pub fn audio(&self) -> Arc<Player> {
+        Arc::clone(&self.audio)
     }
 
     /// The effective configuration (§8.5's publication).
@@ -413,6 +453,42 @@ impl Runtime {
         self.svc_tx.subscribe()
     }
 
+    /// Queue one §11.7 snooze through the runner — the overlay's `s`
+    /// key. A no-op in observer mode and before
+    /// [`Runtime::start_scheduler`] (nothing runs here to re-fire it);
+    /// the scheduler maps the source alarm to its snooze event and the
+    /// latest snooze per alarm wins, so a double press is safe.
+    ///
+    /// The read guard is cloned out of, not held across the send: the
+    /// handle is not `Clone` (its task is not), and the guard must not
+    /// live past an await point. The send itself parks only if the
+    /// runner's 16-slot command channel is full, which a runner
+    /// draining one command per tick never is.
+    pub async fn snooze(&self, source: ScheduledEvent) {
+        let sender = {
+            let guard = self
+                .scheduler
+                .read()
+                .unwrap_or_else(PoisonError::into_inner);
+            let Some(owned) = guard.as_ref() else {
+                return;
+            };
+            owned.handle.snooze_sender()
+        };
+        sender.snooze(source).await;
+    }
+
+    /// Whether this process lost the §4.3 lock arbitration. The loops
+    /// detect overlay transitions in both modes (§16.7 item 3 — the
+    /// §10.1 backstop runs in owner mode too), so this now answers
+    /// the Status screen's question — `RUNNING (daemon)` vs
+    /// `RUNNING (foreground)` — and nothing gates on it. False for
+    /// the owner and for the standalone modes (`--once`, the config
+    /// and status commands), which run no loop to detect anything.
+    pub fn is_observer(&self) -> bool {
+        matches!(recover(&self.service_owner), ServiceOwner::Daemon(_))
+    }
+
     /// Take the §4.3 scheduler lock and start the runner (§15.7 stage
     /// 5's real work). Winning the lock makes this process the
     /// schedule's owner — the runner fires the plan's events exactly
@@ -437,10 +513,13 @@ impl Runtime {
                     clock: self.clock(),
                     store: Arc::clone(&self.cache),
                     scope: self.scope.clone(),
-                    sink: Arc::new(NotifySink::new(
-                        Arc::clone(&self.notifier),
-                        self.subscribe_config(),
-                    )),
+                    sink: Arc::new(FanOutSink {
+                        notify: NotifySink::new(
+                            Arc::clone(&self.notifier),
+                            self.subscribe_config(),
+                        ),
+                        audio: AudioSink::new(Arc::clone(&self.audio), self.subscribe_config()),
+                    }),
                     windows: Arc::new(RuntimeWindowSource {
                         runtime: Arc::downgrade(self),
                     }),
@@ -450,7 +529,7 @@ impl Runtime {
                 .await;
                 *recover_mut(&self.scheduler) = Some(OwnedScheduler {
                     _guard: guard,
-                    _handle: handle,
+                    handle,
                 });
                 *recover_mut(&self.service_owner) = ServiceOwner::Foreground;
                 tracing::info!(
@@ -690,22 +769,24 @@ impl Runtime {
         let (config_health, config_detail) = recover(&self.config_health);
 
         let components = ComponentId::ALL
-            .map(|id| {
-                let (health, detail) = match id {
-                    ComponentId::PrayerService => {
-                        (svc_health, self.prayer_service_detail(&svc_detail))
-                    }
-                    ComponentId::PrayerCalculation => (Health::Ok, "OK".to_owned()),
-                    ComponentId::Location => (Health::Ok, config.location.label.to_uppercase()),
-                    ComponentId::Timezone => (Health::Ok, utc_offset_label(now)),
-                    ComponentId::Notifications
-                    | ComponentId::AdhanSound
-                    | ComponentId::AudioSystem => (Health::Unknown, String::new()),
-                    ComponentId::Network => (network_health, network_detail.clone()),
-                    ComponentId::ConfigFile => (config_health, config_detail.clone()),
-                    ComponentId::PrayerDatabase => (Health::Ok, "LOADED".to_owned()),
-                };
-                Component::new(id, health, detail)
+            .map(|id| match id {
+                ComponentId::PrayerService => {
+                    Component::new(id, svc_health, self.prayer_service_detail(&svc_detail))
+                }
+                ComponentId::PrayerCalculation => Component::new(id, Health::Ok, "OK".to_owned()),
+                ComponentId::Location => {
+                    Component::new(id, Health::Ok, config.location.label.to_uppercase())
+                }
+                ComponentId::Timezone => Component::new(id, Health::Ok, utc_offset_label(now)),
+                ComponentId::Notifications => self.notifier.report(),
+                ComponentId::AdhanSound => self.audio.adhan_report(&config),
+                ComponentId::AudioSystem => {
+                    use crate::audio::AudioPlayer as _;
+                    self.audio.report()
+                }
+                ComponentId::Network => Component::new(id, network_health, network_detail.clone()),
+                ComponentId::ConfigFile => Component::new(id, config_health, config_detail.clone()),
+                ComponentId::PrayerDatabase => Component::new(id, Health::Ok, "LOADED".to_owned()),
             })
             .to_vec();
 
@@ -801,6 +882,11 @@ pub(crate) mod testing {
         /// The `ConfigStore`'s file — write a new configuration here and
         /// call `reload_config` to exercise the SIGHUP path.
         pub config_file: tempfile::NamedTempFile,
+        /// The Adhan file the fixture's configuration points at — the
+        /// `READY` Status row depends on it outliving the runtime. A
+        /// drop guard, not data: it is never read, only dropped last.
+        #[expect(dead_code, reason = "a temp-file guard, not a value")]
+        pub adhan_file: tempfile::NamedTempFile,
     }
 
     impl Fixture {
@@ -828,7 +914,7 @@ pub(crate) mod testing {
     /// §20.3 fixture window (whose zone is `Africa/Algiers` — set the
     /// config's zone to that or `status()`'s "today" will disagree with
     /// the clock).
-    pub(crate) fn runtime(config: Config) -> Fixture {
+    pub(crate) fn runtime(mut config: Config) -> Fixture {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -848,6 +934,18 @@ pub(crate) mod testing {
             params,
             Arc::clone(&clock) as Arc<dyn Clock>,
         ));
+
+        // §20.3's fixed inputs include "the default config", whose
+        // Adhan preset would otherwise resolve against the real
+        // $XDG_DATA_HOME — a machine-dependent READY/NO ADHAN FILE
+        // that would leak into every Status row and strip dot. A
+        // tempfile the fixture owns pins it: READY, everywhere. Some
+        // real bytes, so the file is not an impossible zero-length
+        // mp3 either.
+        let adhan_file = tempfile::NamedTempFile::new().expect("a temp file");
+        std::fs::write(adhan_file.path(), b"ID3 fixture adhan bytes\0")
+            .expect("the temp file is writable");
+        config.adhan.file = adhan_file.path().to_path_buf();
 
         let config_file = tempfile::NamedTempFile::new().expect("a temp file");
         std::fs::write(
@@ -888,6 +986,11 @@ pub(crate) mod testing {
             // a `NoopNotifier` keeps the fixture hermetic (no D-Bus in
             // unit tests).
             notifier: Arc::new(NoopNotifier),
+            // A scripted probe — `mpv`, the healthy machine of
+            // §16.14's specimen strip — pins the `Audio system` row
+            // without reading the host's $PATH, and no child is ever
+            // spawned by a fixture.
+            audio: Arc::new(Player::scripted(crate::audio::players::PlayerKind::Mpv)),
             service_owner: RwLock::new(ServiceOwner::Standalone),
             scheduler: RwLock::new(None),
         };
@@ -897,6 +1000,7 @@ pub(crate) mod testing {
             store,
             clock,
             config_file,
+            adhan_file,
         }
     }
 
@@ -997,14 +1101,23 @@ mod tests {
             reported(ComponentId::Timezone),
             Some((Health::Ok, "UTC+1".to_owned()))
         );
-        // Phases 10–12 own these; Unknown is the honest report (§6.7).
-        for id in [
-            ComponentId::Notifications,
-            ComponentId::AdhanSound,
-            ComponentId::AudioSystem,
-        ] {
-            assert_eq!(reported(id), Some((Health::Unknown, String::new())));
-        }
+        // Phase 10 owns the audio rows and Phase 9 the notification
+        // one. The fixture is hermetic on all three: the NoopNotifier
+        // (no D-Bus in unit tests) reports its intentional silence,
+        // the scripted `mpv` probe reports READY, and the Adhan file
+        // is the fixture's own tempfile — none of these read the host.
+        assert_eq!(
+            reported(ComponentId::Notifications),
+            Some((Health::Ok, "DISABLED".to_owned()))
+        );
+        assert_eq!(
+            reported(ComponentId::AdhanSound),
+            Some((Health::Ok, "READY".to_owned()))
+        );
+        assert_eq!(
+            reported(ComponentId::AudioSystem),
+            Some((Health::Ok, "READY".to_owned()))
+        );
         // No HTTP attempt has run at boot — not "ONLINE", which would
         // be a guess.
         assert_eq!(

@@ -1,10 +1,12 @@
 //! Key resolution, §15.4's exact order:
 //!
 //! 1. Global, always: `Ctrl-C` quits, `Ctrl-L` forces a redraw.
-//! 2. The overlay, if one is up: `Enter` dismisses (and stops the
-//!    audio, Phase 10), `s` snoozes (Phase 10), `Esc` dismisses — and
-//!    it swallows *everything* else, including `1`–`4` and `q`: a call
-//!    to prayer must not be dismissed by an accidental tab switch.
+//! 2. The overlay, if one is up: `Enter` dismisses and stops the
+//!    audio (§13.6), `s` snoozes — stops the audio, re-arms the
+//!    alarm (§11.7) — `Esc` dismisses without stopping the audio —
+//!    and it swallows *everything* else, including `1`–`4` and `q`:
+//!    a call to prayer must not be dismissed by an accidental tab
+//!    switch.
 //! 3. The focused screen's own keys.
 //! 4. The global fallback: `q` quits, `1`–`4` switch the main tab,
 //!    `?` opens the state reference, `Esc` pops the stack (A6).
@@ -50,16 +52,29 @@ pub async fn resolve(key: KeyEvent, shell: &mut Shell, runtime: &Runtime) -> Out
     }
 
     // 2. The overlay swallows everything but its own three keys — the
-    //    fallthrough below never runs while one is up.
-    if shell.overlay.is_some() {
+    //    fallthrough below never runs while one is up. §13.6's
+    //    asymmetric audio lifetime: `Enter` silences (DISMISS), `s`
+    //    silences *and* re-arms, `Esc` removes the overlay but lets
+    //    the audio play to its end.
+    if let Some(overlay) = shell.overlay {
         return match key.code {
             KeyCode::Enter => {
-                // Dismiss (and stop the audio — Phase 10 wires the
-                // stop call into this arm).
                 shell.set_overlay(None);
+                stop_audio(runtime).await;
                 Outcome::Changed
             }
-            KeyCode::Char('s') => Outcome::Ignored, // snooze — Phase 10
+            KeyCode::Char('s') => {
+                let source = snooze_source(overlay);
+                shell.set_overlay(None);
+                stop_audio(runtime).await;
+                // §11.7: the source alarm re-fires as its snooze event
+                // (+3 min Adhan, +5 min mosque) — latest per alarm
+                // wins, never persisted.
+                if let Some(source) = source {
+                    runtime.snooze(source).await;
+                }
+                Outcome::Changed
+            }
             KeyCode::Esc => {
                 shell.set_overlay(None);
                 Outcome::Changed
@@ -102,6 +117,49 @@ pub async fn resolve(key: KeyEvent, shell: &mut Shell, runtime: &Runtime) -> Out
             Outcome::Changed
         }
         _ => Outcome::Ignored,
+    }
+}
+
+/// Stop the Adhan playback (§13.6's DISMISS semantics). Best-effort:
+/// a stop failure is logged by the player, never surfaced as an
+/// error — the overlay is already gone and the loop has nothing to
+/// tell the user that the log does not. Shared by the full TUI and
+/// quick mode's inline overlays: one audio lifetime rule.
+pub(crate) async fn stop_audio(runtime: &Runtime) {
+    use crate::audio::AudioPlayer as _;
+    if let Err(error) = runtime.audio().stop().await {
+        tracing::warn!(target: "salat::ui", ?error, "stopping adhan playback failed");
+    }
+}
+
+/// The §11.7 source alarm behind an overlay — the event as it was
+/// fired, reconstructed from the payload, so the scheduler maps it to
+/// the right snooze event (`Adhan` -> `AdhanSnooze` +3 min,
+/// `MosqueReminder` -> `ReminderSnooze` +5 min). The date rides the
+/// fired alarm's civil date, not "today" — a snooze pressed just
+/// after midnight re-arms the alarm that actually fired. Shared by
+/// the full TUI and quick mode's inline overlays.
+pub(crate) fn snooze_source(
+    overlay: super::shell::Overlay,
+) -> Option<crate::domain::ScheduledEvent> {
+    use crate::domain::{EventKind, ScheduledEvent};
+    match overlay {
+        super::shell::Overlay::AdhanAlert { prayer, at, .. } => Some(ScheduledEvent {
+            kind: EventKind::Adhan,
+            prayer: Some(prayer),
+            date: at.date_naive(),
+            fire_at: at,
+        }),
+        super::shell::Overlay::MosqueReminder {
+            prayer,
+            reminder_at,
+            ..
+        } => Some(ScheduledEvent {
+            kind: EventKind::MosqueReminder,
+            prayer: Some(prayer),
+            date: reminder_at.date_naive(),
+            fire_at: reminder_at,
+        }),
     }
 }
 
@@ -216,7 +274,7 @@ mod tests {
     #[test]
     fn an_overlay_swallows_the_tab_keys_and_quit() {
         let mut shell = Shell::new();
-        shell.set_overlay(Some(super::super::shell::Overlay::AdhanAlert));
+        shell.set_overlay(Some(test_adhan_overlay()));
         for key in [
             KeyCode::Char('1'),
             KeyCode::Char('4'),
@@ -228,18 +286,69 @@ mod tests {
         assert_eq!(*shell.screen(), Screen::Dashboard);
         assert!(shell.overlay.is_some(), "the overlay held");
 
-        // Enter and Esc dismiss; `s` stays for Phase 10.
-        assert_eq!(resolve(press(KeyCode::Enter), &mut shell), Outcome::Changed);
+        // Enter and Esc dismiss.
+        assert_eq!(resolve(press(KeyCode::Esc), &mut shell), Outcome::Changed);
         assert!(shell.overlay.is_none());
+    }
+
+    /// §16.7 item 7 / §16.8 item 7: `Enter` and `s` both dismiss —
+    /// `s` through the §11.7 re-arm, which is safe against the fixture
+    /// (no scheduler is running, so `Runtime::snooze` returns early)
+    /// and through §13.6's stop (a no-op with nothing playing).
+    #[test]
+    fn enter_and_s_dismiss_the_overlay() {
+        let mut shell = Shell::new();
+        shell.set_overlay(Some(test_adhan_overlay()));
+        assert_eq!(resolve(press(KeyCode::Enter), &mut shell), Outcome::Changed);
+        assert!(shell.overlay.is_none(), "Enter dismisses");
+
+        shell.set_overlay(Some(test_mosque_overlay()));
+        assert_eq!(
+            resolve(press(KeyCode::Char('s')), &mut shell),
+            Outcome::Changed
+        );
+        assert!(shell.overlay.is_none(), "s dismisses while re-arming");
     }
 
     /// Ctrl-C outranks the overlay (§15.4 step 1).
     #[test]
     fn ctrl_c_beats_the_overlay() {
         let mut shell = Shell::new();
-        shell.set_overlay(Some(super::super::shell::Overlay::MosqueReminder));
+        shell.set_overlay(Some(test_mosque_overlay()));
         assert_eq!(resolve(ctrl(KeyCode::Char('c')), &mut shell), Outcome::Quit);
         assert!(shell.overlay.is_some(), "quitting does not mutate state");
+    }
+
+    /// A payloaded overlay for the tests — Maghrib at the snapshot's
+    /// specimen instant.
+    fn test_adhan_overlay() -> super::super::shell::Overlay {
+        use chrono::TimeZone;
+        let zone: chrono_tz::Tz = chrono_tz::Africa::Algiers;
+        let at = zone
+            .with_ymd_and_hms(2026, 9, 5, 19, 21, 0)
+            .single()
+            .expect("the specimen instant exists");
+        super::super::shell::Overlay::AdhanAlert {
+            prayer: Notifiable::Maghrib,
+            at,
+            late: false,
+        }
+    }
+
+    /// A payloaded mosque reminder for the tests — Maghrib's, at the
+    /// specimen reminder instant.
+    fn test_mosque_overlay() -> super::super::shell::Overlay {
+        use chrono::TimeZone;
+        let zone: chrono_tz::Tz = chrono_tz::Africa::Algiers;
+        let reminder_at = zone
+            .with_ymd_and_hms(2026, 9, 5, 19, 36, 0)
+            .single()
+            .expect("the specimen reminder instant exists");
+        super::super::shell::Overlay::MosqueReminder {
+            prayer: Notifiable::Maghrib,
+            reminder_at,
+            late: false,
+        }
     }
 
     /// Ctrl-L is the redraw escape hatch.

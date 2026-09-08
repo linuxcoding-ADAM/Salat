@@ -25,4 +25,4 @@ expression: "text(&rendered(width, height))"
 │                                                                              │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-● svc  ○ notif  ○ adhan
+● svc  ● notif  ● adhan

@@ -39,7 +39,7 @@ use crate::ui::layout::Breakpoint;
 use crate::ui::model::build_model;
 use crate::ui::render;
 use crate::ui::screens::{error as error_screen, loading};
-use crate::ui::shell::Shell;
+use crate::ui::shell::{Shell, overlay_from_transition};
 use crate::ui::theme::Theme;
 use crate::ui::widgets::too_small;
 
@@ -257,9 +257,10 @@ fn is_ctrl_c(event: Event) -> bool {
 
 /// §15.2's loop with Phase 8's arms: events, the 250 ms tick (with the
 /// rollover check), the configuration watch, the signals channel, and
-/// the scheduler's `svc_rx` — a fired or missed event is a reason to
-/// repaint, never an overlay trigger (overlays are Phase 10's reaction
-/// to the state machine). Drawing is on demand, capped at 20 Hz.
+/// the scheduler's `svc_rx`. The owner path raises its overlays on the
+/// broadcast; an observer, which receives nothing, raises them from
+/// the state machine's own transitions (§16.7 item 3's second entry
+/// path). Drawing is on demand, capped at 20 Hz.
 async fn run_loop(
     runtime: &Runtime,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -272,6 +273,7 @@ async fn run_loop(
 
     let mut shell = Shell::new();
     let mut model = build_model(runtime);
+    let mut previous_states = model.states;
     let mut last_draw = Instant::now();
     let mut dirty = true;
 
@@ -309,7 +311,22 @@ async fn run_loop(
                 runtime.refresh_on_rollover().await;
                 // The frame's breakpoint is a per-frame fact (§4.5).
                 let (width, height) = crossterm::terminal::size().map_err(term_io)?;
-                model = build_model(runtime);
+                let rebuilt = build_model(runtime);
+                // §16.7 item 3's transition path. In observer mode it
+                // is the only alarm (the daemon owns the fire); in
+                // owner mode it is the §10.1 backstop — `adhan = false`
+                // mutes the event, not the visual alarm — subordinated
+                // to the broadcast through `raise_transition` so a
+                // late fire keeps its `(delayed)` wording.
+                if let Some(raised) =
+                    overlay_from_transition(&previous_states, &rebuilt.states, &rebuilt)
+                {
+                    let merged =
+                        crate::ui::shell::raise_transition(shell.overlay, raised);
+                    shell.set_overlay(merged);
+                }
+                previous_states = rebuilt.states;
+                model = rebuilt;
                 model.breakpoint = Breakpoint::of_size(width, height);
                 dirty = true;
             }
@@ -319,6 +336,7 @@ async fn run_loop(
                     // publication, so this applies rather than waits.
                     runtime.on_config_change().await;
                     model = build_model(runtime);
+                    previous_states = model.states;
                     dirty = true;
                 }
             }
@@ -333,6 +351,7 @@ async fn run_loop(
                 Ok(event) => {
                     if shell.on_service_event(event) {
                         model = build_model(runtime);
+                        previous_states = model.states;
                         dirty = true;
                     }
                 }
@@ -340,6 +359,7 @@ async fn run_loop(
                 // the frame up to the newest one.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     model = build_model(runtime);
+                    previous_states = model.states;
                     dirty = true;
                 }
                 // Never closed: the runtime holds the sender.

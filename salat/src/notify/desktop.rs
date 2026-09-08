@@ -218,11 +218,7 @@ impl Notifier for DesktopNotifier {
         if let Ok(last_error) = self.last_error.read()
             && let Some(detail) = last_error.as_ref()
         {
-            return Component::new(
-                ComponentId::Notifications,
-                Health::Degraded,
-                detail.clone(),
-            );
+            return Component::new(ComponentId::Notifications, Health::Degraded, detail.clone());
         }
         let (health, detail) = match self.probe.read() {
             Ok(probe) => probe.report(),

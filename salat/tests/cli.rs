@@ -78,15 +78,11 @@ fn offline(cmd: &mut Command) -> &mut Command {
 /// their own exit-table tests below; `config` is real since Phase 1;
 /// `--full` is real since Phase 6 — it reads the controlling terminal
 /// directly, so it cannot run under a piped test harness and is
-/// covered by the pty checks instead.
+/// covered by the pty checks instead; `test-adhan` is real since
+/// Phase 10 — its own ladder (§13.5) is tested in `tests/audio.rs`.
 #[test]
 fn every_command_path_reports_not_implemented() {
-    let cases: &[&[&str]] = &[
-        &["status"],
-        &["test-adhan"],
-        &["daemon"],
-        &["daemon", "--once"],
-    ];
+    let cases: &[&[&str]] = &[&["status"], &["daemon"], &["daemon", "--once"]];
     for case in cases {
         let (mut cmd, _state) = salat();
         cmd.args(*case)
@@ -96,6 +92,61 @@ fn every_command_path_reports_not_implemented() {
             .stderr(predicates::str::contains("error[E000]"))
             .stdout(predicates::str::is_empty());
     }
+}
+
+/// §13.5's first ladder step: no Adhan file → the explanation on
+/// stdout (not an `error[E000]` block — a missing file is an
+/// explanation, not a crash), the expected path, and exit 1.
+#[test]
+fn test_adhan_missing_file_explains_the_expected_path() {
+    let (mut cmd, state) = salat();
+    cmd.env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .arg("test-adhan")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicates::str::contains("No Adhan file found."))
+        .stdout(predicates::str::contains(
+            state
+                .path()
+                .join("data/salat/adhan/abdul-basit.mp3")
+                .display()
+                .to_string(),
+        ))
+        .stdout(predicates::str::contains(
+            "Place an MP3 there (or set adhan.file in the config).",
+        ));
+}
+
+/// §13.5's second step: a valid file but no player on `$PATH` → the
+/// four supported players, each with its caveat, and exit 1. The
+/// `PATH` points at an empty directory, so the probe's verdict is
+/// hermetic — no dependence on the host's installed players.
+#[test]
+fn test_adhan_without_a_player_lists_the_four_supported() {
+    let (mut cmd, state) = salat();
+    let adhan_dir = state.path().join("data/salat/adhan");
+    std::fs::create_dir_all(&adhan_dir).expect("the adhan directory");
+    std::fs::write(adhan_dir.join("abdul-basit.mp3"), b"ID3 stub adhan bytes")
+        .expect("the stub adhan file");
+    let empty_path = state.path().join("empty-path");
+    std::fs::create_dir_all(&empty_path).expect("the empty PATH directory");
+    cmd.env("PATH", &empty_path)
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .arg("test-adhan")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicates::str::contains(
+            "No supported audio player found.",
+        ))
+        .stdout(predicates::str::contains("mpv"))
+        .stdout(predicates::str::contains("paplay"))
+        .stdout(predicates::str::contains("ffplay"))
+        .stdout(predicates::str::contains("aplay"))
+        .stdout(predicates::str::contains(
+            "Install one of these and ensure it is on $PATH.",
+        ));
 }
 
 /// §14.6's "API failure, no cache" row: `E301`, exit `4`, and nothing
