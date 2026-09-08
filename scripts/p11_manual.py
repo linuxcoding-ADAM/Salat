@@ -472,6 +472,10 @@ def scenario_b():
         open_location(app)
         app.send(b"\x1b[C")  # → COORDINATES
         assert app.wait_for(b"LAT", 5), "COORDINATES did not open"
+        check(
+            "the panel announces the TAB field switch",
+            app.wait_for(b"tab switches field", 5),
+        )
         app.send(b"41.01")
         app.send(b"\t")
         app.send(b"28.98")

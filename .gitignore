@@ -9,3 +9,6 @@
 
 # Claude Code local settings
 .claude/
+
+# Python regression-driver bytecode
+__pycache__/

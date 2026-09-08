@@ -266,8 +266,10 @@ fn render_search(
 
 /// The COORDINATES panel (§16.6 item 6): LAT/LNG buffers — stacked at
 /// 80×24, side by side from 100×30 — the inline range error in red
-/// while the buffers parse to out-of-range values, and the nearest
-/// city's honesty line once they are valid.
+/// while the buffers parse to out-of-range values, the nearest
+/// city's honesty line once they are valid, and the dim key hint
+/// between the two: Tab is the only way to reach LNG and nothing
+/// else on the screen says so.
 fn render_coords(
     model: &UiModel,
     state: &LocationState,
@@ -276,8 +278,8 @@ fn render_coords(
     theme: &Theme,
     small: bool,
 ) {
-    // Five rows: the box plus both stacked inputs at small — the
-    // footer clips first, the inputs never.
+    // Five rows: the box plus both stacked inputs at small — the key
+    // hint and the footer clip first, the inputs never.
     let Some(inner) = panel_inner(Panel::new(), area, buf, theme, 5) else {
         return;
     };
@@ -301,6 +303,7 @@ fn render_coords(
             state.focus == crate::ui::shell::CoordFocus::Lng,
             &cursor,
         );
+        coord_hint(inner.y + 3, inner, buf, theme);
         coord_footer(
             inner.y + 4,
             &state.lat_buf,
@@ -331,6 +334,7 @@ fn render_coords(
             state.focus == crate::ui::shell::CoordFocus::Lng,
             &cursor,
         );
+        coord_hint(inner.y + 1, inner, buf, theme);
         coord_footer(
             inner.y + 2,
             &state.lat_buf,
@@ -340,6 +344,21 @@ fn render_coords(
             theme,
         );
     }
+}
+
+/// The coordinates' key hint, in AUTO's `enter to accept` voice: the
+/// field switch is Tab, which the global footer's move/adjust wording
+/// does not cover.
+fn coord_hint(y: u16, inner: Rect, buf: &mut Buffer, theme: &Theme) {
+    put_line(
+        buf,
+        inner,
+        y,
+        vec![Span::styled(
+            "  tab switches field · enter commits",
+            Style::new().fg(theme.text_dim),
+        )],
+    );
 }
 
 /// One coordinate input line: `LAT  36.19█` when focused, the whole
@@ -681,6 +700,24 @@ mod tests {
         };
         let text = rendered(100, 30, &state).join("\n");
         assert!(text.contains("nearest: Sétif"), "hint:\n{text}");
+    }
+
+    /// The COORDS panel announces its field switch at every size —
+    /// Tab is the only way to reach LNG and nothing else on the
+    /// screen says so.
+    #[test]
+    fn coords_panel_announces_the_tab_hint() {
+        let state = LocationState {
+            mode: LocationMode::Coords,
+            ..LocationState::default()
+        };
+        for (width, height) in [(80, 24), (100, 30), (120, 35)] {
+            let text = rendered(width, height, &state).join("\n");
+            assert!(
+                text.contains("tab switches field · enter commits"),
+                "hint at {width}x{height}:\n{text}"
+            );
+        }
     }
 
     /// The AUTO panel's accept hint, and E103's inline wording when
