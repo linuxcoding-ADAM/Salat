@@ -305,6 +305,12 @@ async fn run_loop(
     let mut previous_states = model.states;
     let mut last_draw = Instant::now();
     let mut dirty = true;
+    // A keypress's frame draws now, not after the 20 Hz throttle: the
+    // cap exists for the 250 ms tick arms (a redraw storm), not for a
+    // user-paced event. §16.4 item 8's REFRESHING… crumb is the case
+    // that cannot wait — the flag lives only until the next tick
+    // clears it, so a throttled key frame would swallow it entirely.
+    let mut user_paced = false;
 
     loop {
         tokio::select! {
@@ -325,6 +331,7 @@ async fn run_loop(
                         model = rebuild(&shell);
                         model.breakpoint = Breakpoint::of_size(width, height);
                         dirty = true;
+                        user_paced = true;
                     }
                     // A resize needs no handler (§15.2 decision 3) —
                     // layout derives from the frame area each draw, so
@@ -406,7 +413,7 @@ async fn run_loop(
             },
         }
 
-        if dirty && last_draw.elapsed() >= BOOT_POLL {
+        if dirty && (user_paced || last_draw.elapsed() >= BOOT_POLL) {
             terminal
                 .draw(|frame| {
                     render(frame, &model, &shell);
@@ -414,6 +421,7 @@ async fn run_loop(
                 .map_err(term_io)?;
             last_draw = Instant::now();
             dirty = false;
+            user_paced = false;
         }
     }
     Ok(())

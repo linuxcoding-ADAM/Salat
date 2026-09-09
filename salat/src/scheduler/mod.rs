@@ -25,6 +25,12 @@ pub const ADHAN_SNOOZE: chrono::Duration = chrono::Duration::minutes(3);
 /// §A10: re-fire a snoozed mosque reminder five minutes later.
 pub const MOSQUE_SNOOZE: chrono::Duration = chrono::Duration::minutes(5);
 
+/// The detail every missed row carries (§11.5's `app was not
+/// running`). The one marker a missed row is distinguishable by at
+/// read time — the status `Collector` reads it to keep missed events
+/// out of the delivery counters (nothing was delivered).
+pub(crate) const MISSED_DETAIL: &str = "app was not running";
+
 /// The side-effect seam (§23 Phase 8): what actually happens when an
 /// event fires. Phase 8's production handler is the recording stub —
 /// [`TracingSink`] — which logs; Phase 9 (notifications) and Phase 10
@@ -111,6 +117,29 @@ pub(crate) fn log_prayer(prayer: Notifiable) -> &'static str {
     }
 }
 
+/// Strip the leading prayer name from an event-log row label whose
+/// row already carries the prayer in its `prayer` column — the render
+/// prefixes the prayer itself (uppercase, §16.4 item 9's `ISHA Adhan
+/// missed`), so the label must not repeat it (`Isha`). Labels that do
+/// not start with a prayer name (`Pre-Adhan notification`, `Day
+/// rollover`) are returned unchanged.
+pub(crate) fn strip_prayer_prefix(label: &str) -> &str {
+    for name in [
+        log_prayer(Notifiable::Fajr),
+        log_prayer(Notifiable::Dhuhr),
+        log_prayer(Notifiable::Asr),
+        log_prayer(Notifiable::Maghrib),
+        log_prayer(Notifiable::Isha),
+    ] {
+        // Word boundary: `Isha ` strips from `Isha Adhan missed`, never
+        // a hypothetical label starting with the letters alone.
+        if let Some(rest) = label.strip_prefix(&format!("{name} ")) {
+            return rest;
+        }
+    }
+    label
+}
+
 /// The event-log row for a **fired** event — the label/detail wording
 /// follows the §17.2 and §11.5 specimens (`Pre-Adhan notification` /
 /// `MAGHRIB · 5 min window`, `Maghrib Adhan fired (delayed)`).
@@ -179,10 +208,7 @@ pub(crate) fn missed_row(event: &ScheduledEvent) -> (String, &'static str) {
         }
     };
     let prayer = event.prayer.map(log_prayer).unwrap_or_default();
-    (
-        format!("{prayer} {kind_word} missed"),
-        "app was not running",
-    )
+    (format!("{prayer} {kind_word} missed"), MISSED_DETAIL)
 }
 
 #[cfg(test)]
@@ -225,5 +251,32 @@ mod tests {
         let (label, detail) = missed_row(&event);
         assert_eq!(label, "Maghrib Adhan missed");
         assert_eq!(detail, "app was not running");
+        assert_eq!(detail, MISSED_DETAIL);
+    }
+
+    /// The label de-duplication: a row whose `prayer` column is set
+    /// has its label's embedded name stripped, so the renderers'
+    /// uppercase prefix yields `ISHA Adhan missed`, not `ISHA Isha
+    /// Adhan missed`. Non-prayer labels pass through untouched.
+    #[test]
+    fn strip_prayer_prefix_removes_only_the_leading_name() {
+        assert_eq!(strip_prayer_prefix("Isha Adhan missed"), "Adhan missed");
+        assert_eq!(strip_prayer_prefix("Maghrib Adhan fired"), "Adhan fired");
+        assert_eq!(
+            strip_prayer_prefix("Maghrib Mosque reminder snooze fired"),
+            "Mosque reminder snooze fired"
+        );
+        // No embedded name — unchanged.
+        assert_eq!(
+            strip_prayer_prefix("Pre-Adhan notification"),
+            "Pre-Adhan notification"
+        );
+        assert_eq!(strip_prayer_prefix("Day rollover"), "Day rollover");
+        // Word boundary: `Ish...` without the following space is not
+        // the prayer name.
+        assert_eq!(
+            strip_prayer_prefix("Ishsomething else"),
+            "Ishsomething else"
+        );
     }
 }

@@ -25,6 +25,7 @@ use ratatui::text::{Line, Span};
 use chrono::Timelike as _;
 
 use crate::domain::countdown::Countdown;
+use crate::scheduler::strip_prayer_prefix;
 use crate::status::{Component, EventCategory};
 use crate::ui::layout::Breakpoint;
 use crate::ui::model::UiModel;
@@ -362,8 +363,12 @@ fn render_events(
         } else {
             // §16.4 item 9: one line per event at 80×24 — the prayer
             // prefix rides the time line, since there is no sub-line.
+            // The prefix is the `prayer` column, uppercase; the label
+            // never repeats it (§17.2's specimens carry it once).
             match event.prayer {
-                Some(prayer) => format!("{} {}", prayer.display(), event.label),
+                Some(prayer) => {
+                    format!("{} {}", prayer.display(), strip_prayer_prefix(&event.label))
+                }
                 None => event.label.clone(),
             }
         };

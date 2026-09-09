@@ -19,6 +19,7 @@ pub use model::{
 use crate::app::runtime::Runtime;
 use crate::cache::prayer_from_key;
 use crate::domain::day_summary;
+use crate::scheduler::strip_prayer_prefix;
 
 /// Assemble a [`SystemStatus`] from a [`Runtime`] (§15.8): every
 /// service reports, the runtime's cached health fills the components
@@ -65,14 +66,19 @@ impl Collector {
         let mut today = day_summary(&window, &config, now);
         let recent = runtime.recent_events();
         // §16.4 item 6's log-sourced counters: the domain cannot know
-        // them, but the rows that recorded the events do.
+        // them, but the rows that recorded the events do. Missed rows
+        // (§11.5, the `app was not running` specimens) carry the
+        // category but never delivered anything — the counters count
+        // what actually went out, so the missed ones are excluded.
+        let delivered =
+            |event: &LoggedEvent| event.detail.as_deref() != Some(crate::scheduler::MISSED_DETAIL);
         today.notifications_sent = recent
             .iter()
-            .filter(|event| event.category == EventCategory::Notification)
+            .filter(|event| event.category == EventCategory::Notification && delivered(event))
             .count() as u32;
         today.adhan_plays = recent
             .iter()
-            .filter(|event| event.category == EventCategory::Adhan)
+            .filter(|event| event.category == EventCategory::Adhan && delivered(event))
             .count() as u32;
 
         SystemStatus {
@@ -185,14 +191,16 @@ pub fn render_text(status: &SystemStatus, colored: bool) -> String {
     } else {
         out.push_str("recent events:\n");
         for event in &status.recent {
-            let line = format!(
-                "  {} │ {}",
-                event.at.format("%H:%M"),
-                match event.prayer {
-                    Some(prayer) => format!("{} {}", prayer.display(), event.label),
-                    None => event.label.clone(),
+            // §16.4 item 9's row: the prayer prefix is the log's
+            // `prayer` column, uppercase — the label itself never
+            // repeats the prayer (§17.2's specimens carry it once).
+            let label = match event.prayer {
+                Some(prayer) => {
+                    format!("{} {}", prayer.display(), strip_prayer_prefix(&event.label))
                 }
-            );
+                None => event.label.clone(),
+            };
+            let line = format!("  {} │ {}", event.at.format("%H:%M"), label);
             if colored {
                 let color = match event.category {
                     EventCategory::Notification => "33", // yellow
@@ -333,6 +341,132 @@ mod tests {
             status.recent[1].detail.as_deref(),
             Some("MAGHRIB · 5 min window")
         );
+    }
+
+    /// The delivery counters' regression row: missed events (§11.5's
+    /// `app was not running` rows) carry a notification/adhan category
+    /// but delivered nothing — they must never inflate
+    /// `notifications_sent`/`adhan_plays`. The rows themselves still
+    /// appear in `recent`: the log is honest about what was missed;
+    /// the counters are honest about what went out.
+    #[test]
+    fn missed_events_do_not_inflate_the_delivery_counters() {
+        let fixture = rt::snapshot_runtime();
+        let now = dt::snapshot_now();
+
+        // The shape of a day the app missed most of: one fired
+        // notification, one missed notification, two missed Adhans,
+        // and a fired Adhan — five rows, two deliveries.
+        fixture.runtime.block_on(async {
+            fixture
+                .store
+                .append_event(
+                    now,
+                    "notification",
+                    "Pre-Adhan notification",
+                    Some("MAGHRIB · 5 min window"),
+                    Some("maghrib"),
+                )
+                .await
+                .expect("append");
+            fixture
+                .store
+                .append_event(
+                    now,
+                    "notification",
+                    "Isha Pre-Adhan notification missed",
+                    Some(crate::scheduler::MISSED_DETAIL),
+                    Some("isha"),
+                )
+                .await
+                .expect("append");
+            fixture
+                .store
+                .append_event(
+                    now,
+                    "adhan",
+                    "Isha Adhan missed",
+                    Some(crate::scheduler::MISSED_DETAIL),
+                    Some("isha"),
+                )
+                .await
+                .expect("append");
+            fixture
+                .store
+                .append_event(
+                    now,
+                    "adhan",
+                    "Maghrib Adhan missed",
+                    Some(crate::scheduler::MISSED_DETAIL),
+                    Some("maghrib"),
+                )
+                .await
+                .expect("append");
+            fixture
+                .store
+                .append_event(now, "adhan", "Isha Adhan fired", None, Some("isha"))
+                .await
+                .expect("append");
+        });
+        fixture
+            .runtime
+            .block_on(fixture.runtime.reload_recent_events());
+
+        let status = Collector::collect(&fixture.runtime);
+        assert_eq!(status.today.notifications_sent, 1, "the fired row only");
+        assert_eq!(status.today.adhan_plays, 1, "the fired row only");
+        // The missed rows are all still rendered — the log keeps them.
+        assert_eq!(status.recent.len(), 5);
+        assert_eq!(
+            status
+                .recent
+                .iter()
+                .filter(|event| event.label.ends_with("missed"))
+                .count(),
+            3
+        );
+    }
+
+    /// The text surface's de-duplicated row: a missed Adhan renders as
+    /// `ISHA Adhan missed` — the prayer once, from the row's `prayer`
+    /// column — never `ISHA Isha Adhan missed`.
+    #[test]
+    fn the_text_row_prints_the_prayer_once() {
+        let fixture = rt::snapshot_runtime();
+        let now = dt::snapshot_now();
+        fixture.runtime.block_on(async {
+            fixture
+                .store
+                .append_event(
+                    now,
+                    "adhan",
+                    "Isha Adhan missed",
+                    Some(crate::scheduler::MISSED_DETAIL),
+                    Some("isha"),
+                )
+                .await
+                .expect("append");
+            fixture
+                .store
+                .append_event(
+                    now,
+                    "notification",
+                    "Pre-Adhan notification",
+                    Some("MAGHRIB · 5 min window"),
+                    Some("maghrib"),
+                )
+                .await
+                .expect("append");
+        });
+        fixture
+            .runtime
+            .block_on(fixture.runtime.reload_recent_events());
+        let status = Collector::collect(&fixture.runtime);
+        let plain = render_text(&status, false);
+        assert!(plain.contains("ISHA Adhan missed"), "{plain}");
+        assert!(!plain.contains("ISHA Isha"), "{plain}");
+        // The no-prayer-embedded label is untouched.
+        assert!(plain.contains("MAGHRIB Pre-Adhan notification"), "{plain}");
     }
 
     /// §14.6 / §23 item 8: piped output is stable and carries zero

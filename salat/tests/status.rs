@@ -262,6 +262,69 @@ fn the_event_log_renders_rows_or_the_placeholder() {
     assert!(plain.contains("no events yet today"), "{plain}");
 }
 
+/// The regression rows for the manual test's findings: missed events
+/// (§11.5's `app was not running` specimens) must not inflate the
+/// delivery counters, and event rows print the prayer once — `ISHA
+/// Adhan missed`, never `ISHA Isha Adhan missed` — on both surfaces
+/// (the 80×24 screen path prefixes the prayer onto the time line,
+/// where the duplication was visible).
+#[test]
+fn missed_rows_render_once_and_never_count_as_delivered() {
+    let mut status = fixture_status();
+    status.today.notifications_sent = 0;
+    status.today.adhan_plays = 0;
+    status.recent = vec![
+        LoggedEvent {
+            at: at(20, 21),
+            category: EventCategory::Adhan,
+            label: "Isha Adhan missed".to_owned(),
+            detail: Some("app was not running".to_owned()),
+            prayer: Some(Notifiable::Isha),
+        },
+        LoggedEvent {
+            at: at(20, 6),
+            category: EventCategory::Notification,
+            label: "Isha Pre-Adhan notification missed".to_owned(),
+            detail: Some("app was not running".to_owned()),
+            prayer: Some(Notifiable::Isha),
+        },
+        LoggedEvent {
+            at: at(19, 21),
+            category: EventCategory::Adhan,
+            label: "Maghrib Adhan fired".to_owned(),
+            detail: None,
+            prayer: Some(Notifiable::Maghrib),
+        },
+    ];
+
+    // The screen, one line per event (80×24, the path that prefixes
+    // the prayer): the prayer appears once per row.
+    let text = rendered(&status, 80, 24).join("\n");
+    assert!(text.contains("ISHA Adhan missed"), "{text}");
+    assert!(
+        text.contains("ISHA Pre-Adhan notification missed"),
+        "{text}"
+    );
+    assert!(!text.contains("Isha Adhan"), "{text}");
+
+    // The text surface, same discipline.
+    let plain = salat::status::render_text(&status, false);
+    assert!(plain.contains("ISHA Adhan missed"), "{plain}");
+    assert!(!plain.contains("ISHA Isha"), "{plain}");
+    assert!(plain.contains("MAGHRIB Adhan fired"), "{plain}");
+
+    // And the counters — the surface renders whatever the collector
+    // counted, so pin the counting rule's user-visible shape: with
+    // the collector's exclusion applied by hand (this fixture builds
+    // the struct directly), the counters say one delivery, and the
+    // missed rows are still all rendered above.
+    status.today.notifications_sent = 0; // one missed notification — nothing delivered
+    status.today.adhan_plays = 1; // the fired Maghrib row only
+    let plain = salat::status::render_text(&status, false);
+    assert!(plain.contains("adhan plays: 1"), "{plain}");
+    assert!(plain.contains("notifications sent: 0"), "{plain}");
+}
+
 /// Item 8's snapshot row: the STATUS screen at the three sizes —
 /// insta-reviewed, the same form the other screens file.
 #[test]
