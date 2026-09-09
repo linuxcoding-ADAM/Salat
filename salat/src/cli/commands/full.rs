@@ -80,14 +80,20 @@ pub fn run(cli: &Cli) -> Result<ExitCode, SalatError> {
     // theme re-renders every frame once the loop starts.
     let theme = Theme::from(&Config::default().display);
 
+    // §16.10 item 8: the retry's attempt counter — the first run is
+    // not an attempt, so it starts at 0 and the first `r` shows 2.
+    let mut boot_attempt: u32 = 0;
     let runtime = loop {
         match boot_phase(cli, &mut terminal, &theme)? {
             BootOutcome::Runtime(runtime) => break runtime,
             BootOutcome::UserAbort => return Ok(ExitCode::Ok),
-            BootOutcome::Failed(error) => match error_phase(&error, &mut terminal, &theme)? {
-                ErrorChoice::Retry => continue,
-                ErrorChoice::Quit => return Err(error),
-            },
+            BootOutcome::Failed(error) => {
+                boot_attempt += 1;
+                match error_phase(&error, boot_attempt, &mut terminal, &theme)? {
+                    ErrorChoice::Retry => continue,
+                    ErrorChoice::Quit => return Err(error),
+                }
+            }
         }
     };
 
@@ -177,13 +183,27 @@ enum ErrorChoice {
 }
 
 /// The boot-failure ERROR screen: `[R] retry` re-runs the ladder,
-/// `q`/Esc/Ctrl-C quits with the error. The `c`/`d` actions belong to
-/// Phases 11–12, so they wait here.
+/// `q`/Esc/Ctrl-C quits with the error. The `c`/`d` actions belong
+/// to the post-boot flows (§16.10 item 7's in-place fixes), so they
+/// wait here; `attempt` is the retry counter §16.10 item 8 shows
+/// (`RETRYING… · attempt 2 of 3`) while the ladder re-runs — the
+/// count survives across retries because a fresh `r` after a failed
+/// retry is attempt 3, not 2 again.
 fn error_phase(
     error: &SalatError,
+    attempt: u32,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     theme: &Theme,
 ) -> Result<ErrorChoice, SalatError> {
+    // §16.10 item 8: after three attempts (the initial run plus two
+    // retries) the error stays — the counter pins that.
+    let retrying = if attempt <= 3 {
+        error_screen::RetryState {
+            attempt: Some(attempt.min(3)),
+        }
+    } else {
+        error_screen::RetryState::idle()
+    };
     loop {
         terminal
             .draw(|frame| {
@@ -194,7 +214,7 @@ fn error_phase(
                 if breakpoint == Breakpoint::TooSmall {
                     too_small::render(area, buf);
                 } else {
-                    error_screen::render(error, area, buf, theme, breakpoint);
+                    error_screen::render_with_retry(error, &retrying, area, buf, theme, breakpoint);
                 }
             })
             .map_err(term_io)?;
@@ -318,6 +338,16 @@ async fn run_loop(
             },
             _ = tick.tick() => {
                 runtime.refresh_on_rollover().await;
+                // §16.4 item 7's `r`: the key handler only raised the
+                // flag; this is the one place that may await the
+                // re-probe (every component's report + the prayer-time
+                // refetch ride `refresh`). The frame below shows the
+                // refreshed state — and the crumb's REFRESHING… is
+                // gone with it.
+                if shell.status.refreshing {
+                    runtime.refresh().await;
+                    shell.status.refreshing = false;
+                }
                 // The frame's breakpoint is a per-frame fact (§4.5).
                 let (width, height) = crossterm::terminal::size().map_err(term_io)?;
                 let rebuilt = rebuild(&shell);

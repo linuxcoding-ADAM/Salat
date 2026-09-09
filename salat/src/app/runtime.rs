@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock, RwLockWriteGuard, Weak};
 
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, Offset as _};
+use chrono::NaiveDate;
 use chrono_tz::Tz;
 use tokio::sync::{Mutex, broadcast, watch};
 
@@ -37,16 +37,14 @@ use crate::audio::{AudioSink, Player};
 use crate::cache::{CacheError, Store, cache_key};
 use crate::cli::Cli;
 use crate::config::{Config, ConfigDraft, ConfigStore, resolve};
-use crate::domain::{
-    EventKind, Notifiable, PrayerWindow, ScheduledEvent, day_summary, plan_events,
-};
+use crate::domain::{Notifiable, PrayerWindow, ScheduledEvent};
 use crate::error::SalatError;
 use crate::notify::{DesktopNotifier, NoopNotifier, Notifier, NotifySink};
 use crate::scheduler::{
     EventSink, Scheduler, SchedulerDeps, SchedulerHandle, ServiceEvent, WindowSource,
 };
 use crate::service::{PrayerTimeService, ServiceError};
-use crate::status::{Component, ComponentId, Health, NextEvent, SystemStatus};
+use crate::status::{Component, ComponentId, Health, LoggedEvent, SystemStatus};
 
 /// Read a lock's value, recovering from poisoning the way the codebase
 /// does everywhere: a panic elsewhere mid-write leaves a coherent value
@@ -105,6 +103,12 @@ pub struct Runtime {
     /// `None` means unresolved, never `0`: the dashboard then simply
     /// omits the value instead of pointing at a wrong Mecca.
     qibla: RwLock<Option<f64>>,
+    /// Today's event log mapped into the status model (§6.7's
+    /// `recent`), newest first — the async [`Runtime::refresh`] and
+    /// the scheduler's firings reload it, so the synchronous
+    /// `status()` never awaits. Empty until the first reload: an
+    /// honest blank, not a stale one.
+    recent: RwLock<Vec<LoggedEvent>>,
     /// Cached `(health, detail)` for the components whose story changes
     /// only on refresh/config events, so `status()` stays cheap.
     svc_health: RwLock<(Health, String)>,
@@ -394,6 +398,7 @@ impl Runtime {
             completions: RwLock::new(boot.completions),
             day: RwLock::new(boot.today),
             qibla: RwLock::new(boot.qibla),
+            recent: RwLock::new(Vec::new()),
             svc_health: RwLock::new((Health::Ok, "RUNNING".to_owned())),
             network_health: RwLock::new((Health::Unknown, String::new())),
             config_health: RwLock::new((Health::Ok, "OK".to_owned())),
@@ -530,6 +535,89 @@ impl Runtime {
         matches!(recover(&self.service_owner), ServiceOwner::Daemon(_))
     }
 
+    /// The `Prayer service` component (§6.7): the cached health with
+    /// the ownership suffix — the vocabulary the Phase-12 `Collector`
+    /// assembles `SystemStatus` from. Split out of the collector so
+    /// the mapping stays next to the state it reads.
+    pub(crate) fn prayer_service_component(&self) -> Component {
+        let (health, detail) = recover(&self.svc_health);
+        Component::new(
+            ComponentId::PrayerService,
+            health,
+            self.prayer_service_detail(&detail),
+        )
+    }
+
+    /// The `Network` component (§6.7) — `Unknown` until the first
+    /// HTTP attempt, never a false `Ok`.
+    pub(crate) fn network_component(&self) -> Component {
+        let (health, detail) = recover(&self.network_health);
+        Component::new(ComponentId::Network, health, detail)
+    }
+
+    /// The `Config file` component (§6.7).
+    pub(crate) fn config_file_component(&self) -> Component {
+        let (health, detail) = recover(&self.config_health);
+        Component::new(ComponentId::ConfigFile, health, detail)
+    }
+
+    /// The `Notifications` component (§6.7) — the notifier's own
+    /// `report()`, whatever it honestly knows.
+    pub(crate) fn notifier_component(&self) -> Component {
+        self.notifier.report()
+    }
+
+    /// The `Adhan sound` component (§6.7) — the file's verdict against
+    /// the live configuration.
+    pub(crate) fn adhan_sound_component(&self) -> Component {
+        self.audio.adhan_report(&self.config())
+    }
+
+    /// The `Audio system` component (§6.7) — the player's own
+    /// `report()`.
+    pub(crate) fn audio_system_component(&self) -> Component {
+        use crate::audio::AudioPlayer as _;
+        self.audio.report()
+    }
+
+    /// The zone "today" is defined in (§10.2) — the Collector's
+    /// stamping zone for the event log and the day counters.
+    pub(crate) fn tz(&self) -> Tz {
+        recover(&self.tz)
+    }
+
+    /// The cached recent-events list (§6.7's `recent`): today's rows,
+    /// mapped into the status model, newest first. Refreshed by
+    /// [`Runtime::reload_recent_events`] on every async path that
+    /// could change it — after a refresh, on a scheduler firing, on
+    /// the `r`-driven re-probe — so the synchronous `status()` never
+    /// has to reach into SQLite.
+    pub(crate) fn recent_events(&self) -> Vec<LoggedEvent> {
+        recover(&self.recent)
+    }
+
+    /// Re-read today's event log into the `recent` cache (§6.7). Cheap
+    /// (one indexed read of today's rows) and failure-tolerant: a
+    /// cache error warns and keeps the cached list — the Status screen
+    /// shows the last known truth, never a blank rewrite.
+    pub async fn reload_recent_events(&self) {
+        let tz = self.tz();
+        let now = self.clock().now_in(tz);
+        match self.cache.events_today(tz, now).await {
+            Ok(rows) => {
+                let mapped = rows
+                    .iter()
+                    .filter_map(crate::status::Collector::logged_event)
+                    .collect();
+                *recover_mut(&self.recent) = mapped;
+            }
+            Err(error) => tracing::warn!(
+                target: "salat::app",
+                "could not reload today's event log: {error}"
+            ),
+        }
+    }
+
     /// Take the §4.3 scheduler lock and start the runner (§15.7 stage
     /// 5's real work). Winning the lock makes this process the
     /// schedule's owner — the runner fires the plan's events exactly
@@ -594,10 +682,6 @@ impl Runtime {
         }
     }
 
-    fn tz(&self) -> Tz {
-        recover(&self.tz)
-    }
-
     fn day(&self) -> NaiveDate {
         recover(&self.day)
     }
@@ -612,6 +696,10 @@ impl Runtime {
     /// untouched — the network is not implicated, and saying otherwise
     /// would lie in the other direction.
     pub async fn refresh(&self) {
+        // The event log's window moves with the (possibly rolled) day,
+        // and a refresh is also the §15.8 moment the status surfaces
+        // re-read it — the r-key re-probe rides this same path.
+        self.reload_recent_events().await;
         match self.service.refresh().await {
             Ok(refreshed) => {
                 let today = refreshed.window.today.date;
@@ -790,64 +878,15 @@ impl Runtime {
             _ => base.to_owned(),
         }
     }
-    /// A fresh [`SystemStatus`] (§6.7), rebuilt on every call so the
+    /// A fresh [`SystemStatus`] (§6.7) — the §15.8 `Collector`'s one
+    /// assembly, done: every component reports, the day counters fold
+    /// in today's event log, and the result is behind an `Arc` so the
+    /// per-frame model build is a clone. Rebuilt on every call so the
     /// counters and next event never go stale between refreshes — it is
-    /// cheap: a summary and a plan over ten instants, from cached
-    /// health tuples.
-    ///
-    /// The component details are the design's Status-screen vocabulary
-    /// verbatim: `RUNNING`, `OK`, `SÉTIF, ALGERIA` (the label
-    /// uppercased), `UTC+1`, `ONLINE`, `LOADED`. Notifications, Adhan
-    /// sound and Audio system are `Unknown` until Phases 10–12 own them
-    /// — §6.7's honest report, never a false `Ok`.
+    /// cheap: a summary and a plan over ten instants, from cached health
+    /// tuples and the cached `recent` list.
     pub fn status(&self) -> Arc<SystemStatus> {
-        let config = self.config();
-        let window = self.window();
-        let now = self.clock().now_in(self.tz());
-
-        let (svc_health, svc_detail) = recover(&self.svc_health);
-        let (network_health, network_detail) = recover(&self.network_health);
-        let (config_health, config_detail) = recover(&self.config_health);
-
-        let components = ComponentId::ALL
-            .map(|id| match id {
-                ComponentId::PrayerService => {
-                    Component::new(id, svc_health, self.prayer_service_detail(&svc_detail))
-                }
-                ComponentId::PrayerCalculation => Component::new(id, Health::Ok, "OK".to_owned()),
-                ComponentId::Location => {
-                    Component::new(id, Health::Ok, config.location.label.to_uppercase())
-                }
-                ComponentId::Timezone => Component::new(id, Health::Ok, utc_offset_label(now)),
-                ComponentId::Notifications => self.notifier.report(),
-                ComponentId::AdhanSound => self.audio.adhan_report(&config),
-                ComponentId::AudioSystem => {
-                    use crate::audio::AudioPlayer as _;
-                    self.audio.report()
-                }
-                ComponentId::Network => Component::new(id, network_health, network_detail.clone()),
-                ComponentId::ConfigFile => Component::new(id, config_health, config_detail.clone()),
-                ComponentId::PrayerDatabase => Component::new(id, Health::Ok, "LOADED".to_owned()),
-            })
-            .to_vec();
-
-        let next_event = plan_events(&window, &config, now)
-            .into_iter()
-            .find(|event| event.kind != EventKind::DayRollover)
-            .map(|event| NextEvent {
-                kind: event.kind,
-                prayer: event.prayer,
-                fire_at: event.fire_at,
-            });
-
-        Arc::new(SystemStatus {
-            components,
-            next_event,
-            today: day_summary(&window, &config, now),
-            // The event log is the scheduler's (Phase 8+); quick mode
-            // has nothing to show yet.
-            recent: Vec::new(),
-        })
+        Arc::new(crate::status::Collector::collect(self))
     }
 }
 
@@ -877,22 +916,6 @@ impl WindowSource for RuntimeWindowSource {
         if let Some(runtime) = self.runtime.upgrade() {
             runtime.refresh().await;
         }
-    }
-}
-
-/// The Timezone component's detail (§16.4): the zone's current UTC
-/// offset as `UTC+1`, `UTC-4` — or `UTC+5:30` where a zone runs on a
-/// half hour. Pure, so the format is pinned by unit test.
-fn utc_offset_label(now: DateTime<Tz>) -> String {
-    let seconds = now.offset().fix().local_minus_utc();
-    let sign = if seconds < 0 { '-' } else { '+' };
-    let seconds = seconds.unsigned_abs();
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    if minutes == 0 {
-        format!("UTC{sign}{hours}")
-    } else {
-        format!("UTC{sign}{hours}:{minutes:02}")
     }
 }
 
@@ -1013,6 +1036,7 @@ pub(crate) mod testing {
             completions: RwLock::new(Vec::new()),
             day: RwLock::new(dt::TODAY),
             qibla: RwLock::new(None),
+            recent: RwLock::new(Vec::new()),
             svc_health: RwLock::new((Health::Ok, "RUNNING".to_owned())),
             network_health: RwLock::new((Health::Unknown, String::new())),
             config_health: RwLock::new((Health::Ok, "OK".to_owned())),
@@ -1106,6 +1130,7 @@ pub(crate) mod testing {
 mod tests {
     use super::*;
     use crate::api::Revalidated;
+    use crate::domain::EventKind;
     use crate::domain::testing as dt;
     use testing::Fixture;
 
@@ -1191,21 +1216,6 @@ mod tests {
         assert_eq!(next.kind, EventKind::PreNotify);
         assert_eq!(next.prayer, Some(Notifiable::Maghrib));
         assert_eq!(next.fire_at, dt::at(dt::TODAY, 19, 16, 0));
-    }
-
-    /// `UTC+1` for whole hours, `UTC+5:30` for half ones, `UTC-4` west
-    /// of Greenwich — the Timezone detail's format.
-    #[test]
-    fn utc_offset_label_formats_whole_and_half_hours() {
-        let algiers = dt::at(dt::TODAY, 12, 0, 0);
-        assert_eq!(utc_offset_label(algiers), "UTC+1");
-        let kolkata: chrono::DateTime<Tz> =
-            dt::at(dt::TODAY, 12, 0, 0).with_timezone(&chrono_tz::Asia::Kolkata);
-        assert_eq!(utc_offset_label(kolkata), "UTC+5:30");
-        let new_york = dt::at(dt::TODAY, 12, 0, 0).with_timezone(&chrono_tz::America::New_York);
-        assert_eq!(utc_offset_label(new_york), "UTC-4");
-        let london = dt::at(dt::TODAY, 12, 0, 0).with_timezone(&chrono_tz::Europe::London);
-        assert_eq!(utc_offset_label(london), "UTC+1"); // September 2026, BST
     }
 
     /// §18.3: a refresh that cannot reach anything keeps the window and

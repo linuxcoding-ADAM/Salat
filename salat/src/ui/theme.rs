@@ -133,6 +133,11 @@ pub struct Theme {
     pub red_bg: Color,
     /// `#3d1515` — dim red.
     pub red_dim: Color,
+    /// `#100808` — the ERROR screen's trace inset (§3.2's ground
+    /// outside the palette table). At 256/Ansi the mechanical nearest
+    /// is the panel ground, so the trace reads as a plain inset — the
+    /// `redBg` wash around it keeps the block legible either way.
+    pub error_trace: Color,
     /// `#fbbf24` — the "soon"/warning colour.
     pub yellow: Color,
     /// `#1a1200` — a yellow-tinted ground. Collapses to `panelBg` at 256.
@@ -204,6 +209,7 @@ impl Theme {
             red: rgb(0xf8, 0x71, 0x71),
             red_bg: rgb(0x19, 0x08, 0x08),
             red_dim: rgb(0x3d, 0x15, 0x15),
+            error_trace: rgb(0x10, 0x08, 0x08),
             yellow: rgb(0xfb, 0xbf, 0x24),
             yellow_bg: rgb(0x1a, 0x12, 0x00),
             blue: rgb(0x60, 0xa5, 0xfa),
@@ -235,16 +241,17 @@ impl Theme {
             text: idx(252),        // #d0d0d0 — ramp, nearest
             text_bright: idx(255), // #eeeeee — ramp, nearest
             // The cube.
-            border_hi: idx(67),  // cube (1,2,3)
-            blue: idx(75),       // cube (1,3,5)
-            green: idx(78),      // cube (1,4,2)
-            cyan: idx(43),       // cube (0,4,3) — moved off green's cell
-            red: idx(203),       // cube (5,1,1)
-            yellow: idx(214),    // cube (5,3,0)
-            green_dim: idx(22),  // cube (0,1,0)
-            border_grn: idx(28), // cube (0,2,0)
-            red_bg: idx(52),     // cube (1,0,0) — the one kept tint
-            red_dim: idx(88),    // cube (2,0,0)
+            border_hi: idx(67),    // cube (1,2,3)
+            blue: idx(75),         // cube (1,3,5)
+            green: idx(78),        // cube (1,4,2)
+            cyan: idx(43),         // cube (0,4,3) — moved off green's cell
+            red: idx(203),         // cube (5,1,1)
+            yellow: idx(214),      // cube (5,3,0)
+            green_dim: idx(22),    // cube (0,1,0)
+            border_grn: idx(28),   // cube (0,2,0)
+            red_bg: idx(52),       // cube (1,0,0) — the one kept tint
+            red_dim: idx(88),      // cube (2,0,0)
+            error_trace: idx(233), // #100808 → ramp, nearest = panelBg
             // The declared collapses.
             green_bg: idx(233),  // → panelBg, deliberate (§15.6)
             yellow_bg: idx(233), // → panelBg, deliberate (§15.6)
@@ -285,6 +292,7 @@ impl Theme {
             red: Color::LightRed,
             red_bg: Color::Red, // the one kept tint
             red_dim: Color::DarkGray,
+            error_trace: Color::Black, // → panelBg, mechanical nearest
             yellow: Color::LightYellow,
             yellow_bg: Color::Black, // → panelBg, deliberate
             blue: Color::LightBlue,
@@ -446,7 +454,7 @@ mod tests {
     #[test]
     fn the_256_table_matches_the_specification() {
         let theme = Theme::for_mode(RenderMode::Palette256);
-        let expected: [(&str, Color); 22] = [
+        let expected: [(&str, Color); 23] = [
             ("termBg", idx(232)),
             ("panelBg", idx(233)),
             ("borderDim", idx(234)),
@@ -467,10 +475,11 @@ mod tests {
             ("borderGrn", idx(28)),
             ("redBg", idx(52)),
             ("redDim", idx(88)),
+            ("errorTrace", idx(233)),
             ("greenBg", idx(233)),
             ("yellowBg", idx(233)),
         ];
-        let actual: [(&str, Color); 22] = [
+        let actual: [(&str, Color); 23] = [
             ("termBg", theme.term_bg),
             ("panelBg", theme.panel_bg),
             ("borderDim", theme.border_dim),
@@ -491,6 +500,7 @@ mod tests {
             ("borderGrn", theme.border_grn),
             ("redBg", theme.red_bg),
             ("redDim", theme.red_dim),
+            ("errorTrace", theme.error_trace),
             ("greenBg", theme.green_bg),
             ("yellowBg", theme.yellow_bg),
         ];

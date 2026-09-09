@@ -8,7 +8,7 @@
 //! `salat status` later) can be written against it first — neither
 //! consumer may reach into any service, they consume this struct only.
 
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use chrono_tz::Tz;
 
 use crate::domain::prayer::Notifiable;
@@ -130,19 +130,71 @@ pub struct NextEvent {
     pub fire_at: DateTime<Tz>,
 }
 
-/// One entry in the event log (§16.4 item 6): today only, newest
-/// first. `at` is the log's wall-clock stamp.
+/// One entry in the event log (§16.4 item 6, §17.2): today only, newest
+/// first. `at` is the log's stamp, already in the location's zone —
+/// the same zone the renderer prints it in.
+///
+/// The shape mirrors the cache's `event_log` row one-to-one (§17.2);
+/// the [`Collector`](crate::status::Collector) maps rows into it, so
+/// the renderers never see the storage vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoggedEvent {
-    /// When the event happened (UTC — the formatter renders it in the
-    /// location's zone).
-    pub at: DateTime<Utc>,
-    /// What happened.
-    pub kind: EventKind,
-    /// Which prayer it belonged to; `None` for the rollover.
+    /// When the event happened, in the location's zone.
+    pub at: DateTime<Tz>,
+    /// Which of the §17.2 categories it belongs to — the colour the
+    /// row renders in.
+    pub category: EventCategory,
+    /// The one-line summary, e.g. `Pre-Adhan notification`.
+    pub label: String,
+    /// The optional second line, e.g. `MAGHRIB · 5 min window`.
+    pub detail: Option<String>,
+    /// Which prayer it belonged to, when one did.
     pub prayer: Option<Notifiable>,
-    /// The sub-line, e.g. `duration 0:32` or `5 min window`.
-    pub detail: String,
+}
+
+/// The §17.2 categories — the only rows the event log holds, and the
+/// Status screen's row colours: yellow for notifications, blue for
+/// Adhan playbacks, dim for state changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventCategory {
+    /// A desktop notification fired.
+    Notification,
+    /// An Adhan playback fired.
+    Adhan,
+    /// A state changed (a completion toggled, the mode switched).
+    State,
+    /// A subsystem failure worth a row.
+    Error,
+    /// A system event (the day rollover).
+    System,
+}
+
+impl EventCategory {
+    /// The §17.2 storage spelling — the exact strings the `category`
+    /// column may hold.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Notification => "notification",
+            Self::Adhan => "adhan",
+            Self::State => "state",
+            Self::Error => "error",
+            Self::System => "system",
+        }
+    }
+
+    /// Parse a stored category string. `None` on anything else — the
+    /// writer validates against the same five, so a miss is corruption,
+    /// and the caller decides what a dropped row is worth.
+    pub fn from_store(category: &str) -> Option<Self> {
+        match category {
+            "notification" => Some(Self::Notification),
+            "adhan" => Some(Self::Adhan),
+            "state" => Some(Self::State),
+            "error" => Some(Self::Error),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
 }
 
 /// The §6.7 aggregate both status surfaces render. Built by the
@@ -220,6 +272,8 @@ mod tests {
                 total: 5,
                 passed: 3,
                 remaining: 2,
+                notifications_sent: 1,
+                adhan_plays: 0,
                 next_notify: None,
             },
             recent: Vec::new(),
@@ -227,5 +281,21 @@ mod tests {
         let network = status.component(ComponentId::Network).unwrap();
         assert_eq!(network.health, Health::Degraded);
         assert!(status.component(ComponentId::AudioSystem).is_none());
+    }
+
+    /// The §17.2 categories round-trip through their storage spelling —
+    /// the only strings the log's `category` column may hold.
+    #[test]
+    fn event_categories_round_trip() {
+        for category in [
+            EventCategory::Notification,
+            EventCategory::Adhan,
+            EventCategory::State,
+            EventCategory::Error,
+            EventCategory::System,
+        ] {
+            assert_eq!(EventCategory::from_store(category.as_str()), Some(category));
+        }
+        assert_eq!(EventCategory::from_store("misc"), None);
     }
 }

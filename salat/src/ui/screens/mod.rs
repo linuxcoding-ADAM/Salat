@@ -1,9 +1,8 @@
-//! The screens of §16, one module each (§19). Phase 6 implements the
-//! [`loading`] and [`states`] screens fully, [`error`] minimally (boot
-//! failures — Phase 12 completes it), and every other module as a
-//! title-only placeholder body whose phase replaces it: dashboard and
-//! status (Phase 7), the overlays (Phase 10), settings + notif +
-//! location + confirm (Phase 11).
+//! The screens of §16, one module each (§19). Phase 6 implemented the
+//! [`loading`] and [`states`] screens fully and [`error`] minimally
+//! (boot failures); every placeholder body has since been replaced by
+//! its phase: dashboard and status (Phase 7/12), the overlays (Phase
+//! 10), settings + notif + location + confirm (Phase 11).
 
 pub mod adhan_alert;
 pub mod confirm;
@@ -20,9 +19,6 @@ pub mod status;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::Widget as _;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
 
 use crate::ui::layout::Breakpoint;
 use crate::ui::model::UiModel;
@@ -79,17 +75,4 @@ pub fn render_overlay(
         Overlay::AdhanAlert { .. } => adhan_alert::render(overlay, model, area, buf, theme),
         Overlay::MosqueReminder { .. } => mosque_reminder::render(overlay, model, area, buf, theme),
     }
-}
-
-/// A placeholder body: the screen's design title, centered — the shape
-/// every unimplemented screen shares while its phase is pending.
-pub(crate) fn title_only(title: &str, area: Rect, buf: &mut Buffer, theme: &Theme) {
-    if area.width < 4 || area.height < 1 {
-        return;
-    }
-    let line = Line::from(Span::styled(title, Style::new().fg(theme.text_sub)));
-    let y = area.y + area.height / 2;
-    let width = title.chars().count() as u16;
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    line.render(Rect::new(x, y, area.width, 1), buf);
 }

@@ -92,7 +92,7 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, SalatError> {
     let stdout_is_tty = std::io::stdout().is_terminal();
     let once = cli.once || !stdout_is_tty;
     match &cli.command {
-        Some(Command::Status) => commands::status::run(),
+        Some(Command::Status) => commands::status::run(&cli),
         Some(Command::Config { edit }) => commands::config::run(*edit, cli.config.as_deref()),
         Some(Command::TestAdhan) => commands::test_adhan::run(&cli),
         Some(Command::Daemon { once }) => commands::daemon::run(*once),

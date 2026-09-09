@@ -33,3 +33,21 @@ Notes:
   XDG dirs and `HOME`, so it never touches your real `~/.config/salat`.
 - `c_before` stages the clock so the scheduler's Pre-Adhan notification
   fires during the run; the other scenarios finish in seconds.
+
+## `p12_manual.py` — Phase 12 (§23 item 9)
+
+Three scenarios, run one at a time:
+
+```
+python3 scripts/p12_manual.py a_screen   # STATUS screen: ten components, live clock; `r` → REFRESHING… → settle
+python3 scripts/p12_manual.py b_agree    # `salat status` and the STATUS screen agree on all ten components
+python3 scripts/p12_manual.py c_broken   # no player on $PATH: both surfaces report NO AUDIO PLAYER, exit 0
+```
+
+Same prerequisites as `p11_manual.py` (the TUI scenarios boot online — a
+cold boot cannot reach the render loop without a window). Scenario
+`b_agree` presses `r` on the TUI before comparing: the text surface's
+own refresh probes the network, and a TUI booted on the fresh cache it
+left makes no HTTP attempt — `Network` honestly stays `Unknown` until
+probed, so both surfaces must have actually probed before the row
+compares.

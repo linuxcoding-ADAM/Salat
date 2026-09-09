@@ -1,0 +1,39 @@
+---
+source: salat/tests/status.rs
+expression: text
+---
+  SYSTEM STATUS                                                                                                 17:38:00
+ ╭─ SERVICES ───────────────────────────────────────────────────────╮  ╭─ NEXT EVENT ─────────────────────────────────╮ 
+ │  ○ Prayer service                                      NOT PROBED│  │  Pre-Adhan notification · MAGHRIB 19:16      │ 
+ │  ● Prayer calculation                                    VERIFIED│  │                                              │ 
+ │  ● Location                                              VERIFIED│  │  01:38:00                                    │ 
+ │  ● Timezone                                              VERIFIED│  │                                              │ 
+ │  ○ Notifications                                       NOT PROBED│  ╰──░░░░░░░░░░░░░░░░░░░░░░░░░░──────────────────╯ 
+ │  ○ Adhan sound                                         NOT PROBED│  ╭─ TODAY ──────────────────────────────────────╮ 
+ │  ○ Audio system                                        NOT PROBED│  │  Total prayers       5  Notifications sent  1│ 
+ │  ○ Network                                             NOT PROBED│  │  Passed              3  Adhan plays         0│ 
+ │  ○ Config file                                         NOT PROBED│  │  Remaining           2  Next notify     19:16│ 
+ │  ● Prayer database                                       VERIFIED│  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ │                                                                  │  │                                              │ 
+ ╰──────────────────────────────────────────────────────────────────╯  ╰──────────────────────────────────────────────╯ 
+ ╭─ RECENT EVENTS · TODAY ────────────────────────────────────────────────────────────────────────────────────────────╮ 
+ │  no events yet today                                                                                               │ 
+ │                                                                                                                    │ 
+ │                                                                                                                    │ 
+ │                                                                                                                    │ 
+ │                                                                                                                    │ 
+ │                                                                                                                    │ 
+ │                                                                                                                    │ 
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

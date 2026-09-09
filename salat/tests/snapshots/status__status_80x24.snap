@@ -1,0 +1,28 @@
+---
+source: salat/tests/status.rs
+expression: text
+---
+ ╭─ SERVICES ─────────────────────────────────────────────────────────────────╮ 
+ │  ○ Prayer service                                                NOT PROBED│ 
+ │  ● Prayer calculation                                              VERIFIED│ 
+ │  ● Location                                                        VERIFIED│ 
+ │  ● Timezone                                                        VERIFIED│ 
+ │  ○ Notifications                                                 NOT PROBED│ 
+ │  ○ Adhan sound                                                   NOT PROBED│ 
+ │  ○ Audio system                                                  NOT PROBED│ 
+ │  ○ Network                                                       NOT PROBED│ 
+ │  ○ Config file                                                   NOT PROBED│ 
+ │  ● Prayer database                                                 VERIFIED│ 
+ │                                                                            │ 
+ │                                                                            │ 
+ │                                                                            │ 
+ │                                                                            │ 
+ ╰────────────────────────────────────────────────────────────────────────────╯ 
+ ╭─ RECENT EVENTS · TODAY ────────────────────────────────────────────────────╮ 
+ │  no events yet today                                                       │ 
+ │                                                                            │ 
+ │                                                                            │ 
+ │                                                                            │ 
+ │                                                                            │ 
+ │                                                                            │ 
+ ╰────────────────────────────────────────────────────────────────────────────╯

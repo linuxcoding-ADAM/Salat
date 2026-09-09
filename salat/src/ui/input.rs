@@ -190,6 +190,13 @@ async fn screen_keys(key: KeyEvent, shell: &mut Shell, runtime: &Runtime) -> Opt
             }
             _ => Some(Outcome::Ignored),
         },
+        // §16.10 item 4: the ERROR screen's actions are the error's own
+        // — `r` retry, `c` coordinates, `d` defaults, Esc back.
+        Screen::Error(error) => error_keys(key, shell, error.clone()),
+        // §16.4 item 7: `↑↓`/`PgUp`/`PgDn` scroll the event log, `r`
+        // re-probes. The tab digits, `q` and Esc fall through to the
+        // global vocabulary.
+        Screen::Status => status_keys(key, shell),
         _ => None,
     }
 }
@@ -221,6 +228,88 @@ async fn dashboard_keys(key: KeyEvent, shell: &mut Shell, runtime: &Runtime) -> 
         _ => None,
     }
 }
+
+/// The STATUS screen's keys (§16.4 item 7): `↑↓` scroll the event log
+/// one event at a time, `PgUp`/`PgDn` a page, `r` forces the refresh —
+/// the flag paints `REFRESHING…` into the crumb, and the event loop's
+/// tick arm (the only place that may await the re-probe) performs it
+/// and clears the flag. Everything else returns `None` so the global
+/// vocabulary (`q`, `1`–`4`, Esc) still applies.
+fn status_keys(key: KeyEvent, shell: &mut Shell) -> Option<Outcome> {
+    match key.code {
+        KeyCode::Up => {
+            shell.status.scroll = shell.status.scroll.saturating_sub(1);
+            Some(Outcome::Changed)
+        }
+        KeyCode::Down => {
+            shell.status.scroll = shell.status.scroll.saturating_add(1);
+            Some(Outcome::Changed)
+        }
+        KeyCode::PageUp => {
+            shell.status.scroll = shell.status.scroll.saturating_sub(PAGE);
+            Some(Outcome::Changed)
+        }
+        KeyCode::PageDown => {
+            shell.status.scroll = shell.status.scroll.saturating_add(PAGE);
+            Some(Outcome::Changed)
+        }
+        KeyCode::Char('r') => {
+            // Only set the flag; the re-probe itself is the tick arm's
+            // (§16.4 item 8 — the repaint below shows REFRESHING…
+            // while it runs). A repeat press is a no-op, not a queue.
+            shell.status.refreshing = true;
+            Some(Outcome::Changed)
+        }
+        _ => None,
+    }
+}
+
+/// The ERROR screen's keys (§16.10 item 4): the buttons the error's
+/// own `actions()` advertise — `r` retry, `c` coordinates, `d` use
+/// defaults, Esc back. Keys whose action the error does not offer are
+/// ignored (the screen renders only the offered buttons; a press the
+/// design did not wire is not one).
+fn error_keys(
+    key: KeyEvent,
+    shell: &mut Shell,
+    error: crate::error::SalatError,
+) -> Option<Outcome> {
+    use crate::error::ErrorAction;
+    match key.code {
+        KeyCode::Char('r') if error.actions().contains(&ErrorAction::Retry) => {
+            // Retry is the boot ladder's re-run — this screen's own
+            // loop (full.rs `error_phase`) owns that key while the
+            // stack is only a boot failure. On the post-boot stack the
+            // honest answer is a redraw: the error stays until its
+            // producer resolves it.
+            Some(Outcome::Ignored)
+        }
+        KeyCode::Char('c') if error.actions().contains(&ErrorAction::Coordinates) => {
+            // §16.10 item 5: jump straight to LOCATION COORDS mode —
+            // the manual fix for a failed lookup.
+            shell.pop();
+            shell.location.mode = LocationMode::Coords;
+            shell.push(Screen::Location);
+            Some(Outcome::Changed)
+        }
+        KeyCode::Char('d') if error.actions().contains(&ErrorAction::UseDefaults) => {
+            // §16.10 item 5: restore the default configuration, then
+            // back — the draft the save flow keeps open is the
+            // reverted one.
+            shell.draft = None;
+            shell.pop();
+            Some(Outcome::Changed)
+        }
+        KeyCode::Esc if error.actions().contains(&ErrorAction::Back) => {
+            shell.pop();
+            Some(Outcome::Changed)
+        }
+        _ => Some(Outcome::Ignored),
+    }
+}
+
+/// One page of the status log — the visible rows, by event.
+const PAGE: u16 = 6;
 
 /// The LOCATION screen's keys (§16.6 item 6): `←→` switch mode (the
 /// AUTO proposal computed on entering AUTO), `Tab` switches mode in

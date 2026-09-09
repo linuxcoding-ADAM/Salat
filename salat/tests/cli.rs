@@ -79,10 +79,12 @@ fn offline(cmd: &mut Command) -> &mut Command {
 /// `--full` is real since Phase 6 — it reads the controlling terminal
 /// directly, so it cannot run under a piped test harness and is
 /// covered by the pty checks instead; `test-adhan` is real since
-/// Phase 10 — its own ladder (§13.5) is tested in `tests/audio.rs`.
+/// Phase 10 — its own ladder (§13.5) is tested in `tests/audio.rs`;
+/// `status` is real since Phase 12 — its own surface tests are in
+/// `tests/status.rs`.
 #[test]
 fn every_command_path_reports_not_implemented() {
-    let cases: &[&[&str]] = &[&["status"], &["daemon"], &["daemon", "--once"]];
+    let cases: &[&[&str]] = &[&["daemon"], &["daemon", "--once"]];
     for case in cases {
         let (mut cmd, _state) = salat();
         cmd.args(*case)

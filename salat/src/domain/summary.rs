@@ -1,9 +1,11 @@
 //! `DaySummary` — the Status screen's day counters (§6.5).
 //!
-//! Exactly the four §6.5 values. The Status screen's wider counters
-//! (notifications sent, Adhan plays, recent events) come from the event
-//! log in `status::model` (§6.7), not from here — this struct is what
-//! the *domain* can compute about a day, and nothing more.
+//! The four §6.5 values the *domain* can compute from a window, plus
+//! the two §16.4 item-6 counters (notifications sent, Adhan plays) that
+//! only the event log knows. The domain fills those with zero; the
+//! Phase-12 `Collector` (§15.8) overwrites them from today's rows —
+//! the counting itself belongs to the log that recorded the events,
+//! not to the pure function that summarises a window.
 
 use chrono::DateTime;
 use chrono_tz::Tz;
@@ -14,7 +16,8 @@ use super::day::PrayerWindow;
 use super::prayer::Notifiable;
 use super::schedule::{EventKind, plan_events};
 
-/// Today's counters (§6.5): `total/passed/remaining/next_notify`.
+/// Today's counters (§6.5, §16.4 item 6):
+/// `total/passed/remaining/next_notify`, plus the event-log counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DaySummary {
     /// Notifiable prayers today — five, unless the API model changes.
@@ -22,6 +25,12 @@ pub struct DaySummary {
     /// Those whose instant is at or before `now`.
     pub passed: u32,
     pub remaining: u32,
+    /// Desktop notifications that actually went out today (§16.4 item
+    /// 6's "Notifications sent"). Zero from the domain — the
+    /// event-log-owning `Collector` fills the real count.
+    pub notifications_sent: u32,
+    /// Adhan playbacks that fired today ("Adhan plays"). Same deal.
+    pub adhan_plays: u32,
     /// When the next user-facing firing (pre-notify, Adhan or mosque
     /// reminder — anything except the rollover, which the user never
     /// sees) is due, from the same event set the planner produces.
@@ -48,6 +57,8 @@ pub fn day_summary(window: &PrayerWindow, cfg: &Config, now: DateTime<Tz>) -> Da
         total,
         passed,
         remaining: total - passed,
+        notifications_sent: 0,
+        adhan_plays: 0,
         next_notify,
     }
 }

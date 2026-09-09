@@ -209,10 +209,15 @@ pub struct LocationState {
     pub auto: Option<Result<CityMatch, String>>,
 }
 
-/// The status log's scroll position.
+/// The status log's scroll position, and the `r`-driven refresh flag.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct StatusState {
     pub scroll: u16,
+    /// Set by the `r` key (§16.4 item 7): the screen paints
+    /// `REFRESHING…` into the crumb, and the event loop's tick arm —
+    /// the only place that may await a re-probe — performs the
+    /// `runtime.refresh()` and clears it.
+    pub refreshing: bool,
 }
 
 /// The whole interactive UI (§15.1, field-for-field).
