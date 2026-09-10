@@ -71,31 +71,6 @@ fn offline(cmd: &mut Command) -> &mut Command {
         .env("ALL_PROXY", "http://127.0.0.1:9")
 }
 
-/// Every still-unimplemented command path answers with the typed
-/// not-implemented error — exit `1` (§14.5 runtime), the `error[E000]`
-/// line on stderr, and an empty stdout: a frame or nothing (§14.6).
-/// Quick's bare and `--once` paths are real since Phase 5 and have
-/// their own exit-table tests below; `config` is real since Phase 1;
-/// `--full` is real since Phase 6 — it reads the controlling terminal
-/// directly, so it cannot run under a piped test harness and is
-/// covered by the pty checks instead; `test-adhan` is real since
-/// Phase 10 — its own ladder (§13.5) is tested in `tests/audio.rs`;
-/// `status` is real since Phase 12 — its own surface tests are in
-/// `tests/status.rs`.
-#[test]
-fn every_command_path_reports_not_implemented() {
-    let cases: &[&[&str]] = &[&["daemon"], &["daemon", "--once"]];
-    for case in cases {
-        let (mut cmd, _state) = salat();
-        cmd.args(*case)
-            .assert()
-            .failure()
-            .code(1)
-            .stderr(predicates::str::contains("error[E000]"))
-            .stdout(predicates::str::is_empty());
-    }
-}
-
 /// §13.5's first ladder step: no Adhan file → the explanation on
 /// stdout (not an `error[E000]` block — a missing file is an
 /// explanation, not a crash), the expected path, and exit 1.

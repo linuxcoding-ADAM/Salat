@@ -158,6 +158,25 @@ enum ServiceOwner {
     Daemon(LockFile),
 }
 
+/// What [`Runtime::claim_scheduler`] decided (§4.3) — the daemon's
+/// handshake. A TUI folds every variant into non-fatal behavior
+/// (§18.3); the daemon treats the two losses as fatal exits, because
+/// it exists to schedule and cannot honestly run without owning the
+/// schedule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchedulerClaim {
+    /// This process owns the schedule: the runner is live and the
+    /// §11.5 startup catch-up has already completed.
+    Owned,
+    /// Another process holds the lock — its record, for the "already
+    /// running" message.
+    Occupied(LockFile),
+    /// The lock file could not be opened at all. `cause` is the errno
+    /// text; for a TUI this is §18.3's degradation, for a daemon it is
+    /// `E904`.
+    Unavailable { cause: String },
+}
+
 /// What [`Runtime::start_scheduler`] won: the exclusive lock and the
 /// runner's handle, kept alive together.
 struct OwnedScheduler {
@@ -619,67 +638,120 @@ impl Runtime {
     }
 
     /// Take the §4.3 scheduler lock and start the runner (§15.7 stage
-    /// 5's real work). Winning the lock makes this process the
-    /// schedule's owner — the runner fires the plan's events exactly
-    /// once each; losing it is observer mode: everything renders,
-    /// nothing fires, and the Status screen reports `RUNNING (daemon)`.
-    /// A lock file that cannot even be opened is §18.3's honest
-    /// degradation: a warning, no scheduler, the app keeps telling the
-    /// time.
+    /// 5's real work), reporting the arbitration outcome to the caller
+    /// (§23 Phase 13's `daemon::run` handshake). Winning the lock makes
+    /// this process the schedule's owner — the runner fires the plan's
+    /// events exactly once each; losing it is the `Occupied` claim, the
+    /// holder's record for the caller's message; a lock file that
+    /// cannot even be opened is the `Unavailable` claim.
+    ///
+    /// Idempotent: a second call reports what the first decided, so a
+    /// TUI that already folded the outcome is never re-arbitrated.
     ///
     /// The §11.5 startup catch-up completes inside this call — before
     /// any UI subscription can exist — so a catch-up fire can never be
     /// mistaken for a live one. Called once after boot, on the
-    /// runtime's own `block_on`; a second call is a no-op.
+    /// runtime's own `block_on`.
+    pub async fn claim_scheduler(self: &Arc<Self>) -> SchedulerClaim {
+        match recover(&self.service_owner) {
+            ServiceOwner::Foreground => SchedulerClaim::Owned,
+            ServiceOwner::Daemon(holder) => SchedulerClaim::Occupied(holder),
+            ServiceOwner::Standalone => {
+                let now = self.clock.now_utc();
+                match lock::try_acquire(&self.lock_path, now) {
+                    Ok(Acquisition::Held(guard)) => {
+                        let handle = Scheduler::spawn(SchedulerDeps {
+                            clock: self.clock(),
+                            store: Arc::clone(&self.cache),
+                            scope: self.scope.clone(),
+                            sink: Arc::new(FanOutSink {
+                                notify: NotifySink::new(
+                                    Arc::clone(&self.notifier),
+                                    self.subscribe_config(),
+                                ),
+                                audio: AudioSink::new(
+                                    Arc::clone(&self.audio),
+                                    self.subscribe_config(),
+                                ),
+                            }),
+                            windows: Arc::new(RuntimeWindowSource {
+                                runtime: Arc::downgrade(self),
+                            }),
+                            config: self.subscribe_config(),
+                            events: self.svc_tx.clone(),
+                        })
+                        .await;
+                        *recover_mut(&self.scheduler) = Some(OwnedScheduler {
+                            _guard: guard,
+                            handle,
+                        });
+                        *recover_mut(&self.service_owner) = ServiceOwner::Foreground;
+                        tracing::info!(
+                            target: "salat::app",
+                            "scheduler started — this process owns the schedule"
+                        );
+                        SchedulerClaim::Owned
+                    }
+                    Ok(Acquisition::Occupied(holder)) => {
+                        *recover_mut(&self.service_owner) = ServiceOwner::Daemon(holder);
+                        tracing::info!(
+                            target: "salat::app",
+                            pid = holder.pid,
+                            "scheduler lock held elsewhere — observer mode, nothing fires here"
+                        );
+                        SchedulerClaim::Occupied(holder)
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "salat::app",
+                            %error,
+                            "the scheduler lock could not be taken — running without scheduling"
+                        );
+                        SchedulerClaim::Unavailable {
+                            cause: error.to_string(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The TUI's fold of [`Runtime::claim_scheduler`]: every outcome
+    /// stays non-fatal (§18.3) — winning schedules, losing renders
+    /// without firing, an unopenable lock warns. The daemon calls
+    /// `claim_scheduler` itself because it must *fail* on the same
+    /// outcomes the TUI shrugs at.
     pub async fn start_scheduler(self: &Arc<Self>) {
-        if !matches!(recover(&self.service_owner), ServiceOwner::Standalone) {
-            return;
+        let _ = self.claim_scheduler().await;
+    }
+
+    /// The daemon's graceful shutdown (§23 Phase 13): stop the runner
+    /// (its awaited exit is the event log's flush — every in-flight
+    /// ledger and log write completes), release the §4.3 lock, and run
+    /// §13.3's awaited audio stop so no Adhan outlives the daemon. A
+    /// no-op when this process never owned the schedule.
+    pub async fn shutdown_scheduler(&self) {
+        let owned = recover_mut(&self.scheduler).take();
+        if let Some(owned) = owned {
+            let OwnedScheduler { _guard, handle } = owned;
+            // The runner first: it owns the writes a shutdown must let
+            // land. Its exit is prompt — the select loop breaks on the
+            // Shutdown command without waiting for the next tick.
+            handle.shutdown().await;
+            // The guard's drop releases the lock, so a waiting process
+            // can claim the schedule the moment this returns.
+            drop(_guard);
+            tracing::info!(target: "salat::app", "scheduler stopped — the lock is released");
+            // Only an owner reverts to Standalone — an observer's
+            // `Daemon` record must survive so `is_observer` (and the
+            // Status screen's `RUNNING (daemon)`) keeps telling the
+            // truth after a no-op shutdown call.
+            *recover_mut(&self.service_owner) = ServiceOwner::Standalone;
         }
-        let now = self.clock.now_utc();
-        match lock::try_acquire(&self.lock_path, now) {
-            Ok(Acquisition::Held(guard)) => {
-                let handle = Scheduler::spawn(SchedulerDeps {
-                    clock: self.clock(),
-                    store: Arc::clone(&self.cache),
-                    scope: self.scope.clone(),
-                    sink: Arc::new(FanOutSink {
-                        notify: NotifySink::new(
-                            Arc::clone(&self.notifier),
-                            self.subscribe_config(),
-                        ),
-                        audio: AudioSink::new(Arc::clone(&self.audio), self.subscribe_config()),
-                    }),
-                    windows: Arc::new(RuntimeWindowSource {
-                        runtime: Arc::downgrade(self),
-                    }),
-                    config: self.subscribe_config(),
-                    events: self.svc_tx.clone(),
-                })
-                .await;
-                *recover_mut(&self.scheduler) = Some(OwnedScheduler {
-                    _guard: guard,
-                    handle,
-                });
-                *recover_mut(&self.service_owner) = ServiceOwner::Foreground;
-                tracing::info!(
-                    target: "salat::app",
-                    "scheduler started — this process owns the schedule"
-                );
-            }
-            Ok(Acquisition::Occupied(holder)) => {
-                *recover_mut(&self.service_owner) = ServiceOwner::Daemon(holder);
-                tracing::info!(
-                    target: "salat::app",
-                    pid = holder.pid,
-                    "scheduler lock held elsewhere — observer mode, nothing fires here"
-                );
-            }
-            Err(error) => tracing::warn!(
-                target: "salat::app",
-                %error,
-                "the scheduler lock could not be taken — running without scheduling"
-            ),
-        }
+        // §13.3's ladder, awaited: SIGTERM, 500 ms, SIGKILL — bounded,
+        // so the 2-second shutdown budget holds even mid-Adhan.
+        use crate::audio::AudioPlayer as _;
+        let _ = self.audio.stop().await;
     }
 
     fn day(&self) -> NaiveDate {

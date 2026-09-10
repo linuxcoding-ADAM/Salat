@@ -39,6 +39,9 @@ unicode-width = "0.2"
 [dev-dependencies]
 assert_cmd = "2.2.2"
 insta = "1"
+# Phase 13's row-4 test: `salat --full` needs a real controlling
+# terminal, which the test builds with `posix_openpt`; test-only.
+libc = "0.2"
 predicates = "3.1.4"
 tempfile = "3.27.0"
 tokio = { version = "1.53", features = ["test-util"] }

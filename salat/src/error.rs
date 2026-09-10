@@ -151,6 +151,28 @@ pub enum SalatError {
         /// Why the terminal operation failed (errno text).
         cause: String,
     },
+    /// `E903` — another process owns the §4.3 scheduler lock, so a
+    /// daemon cannot start: the clear "already running" exit Phase 13's
+    /// second-daemon row demands. Like `E901`/`E902`, not in the
+    /// design's §18.2 table (which has no arbitration row); numbered in
+    /// the 9xx range so it cannot collide with a future design code.
+    #[error("a scheduler is already running (pid {pid})")]
+    SchedulerConflict {
+        /// The holder the lock file records — a daemon or a foreground
+        /// TUI, indistinguishably: both own the schedule the same way.
+        pid: u32,
+        /// When that holder started, when the lock file carried it.
+        started_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    /// `E904` — the §4.3 scheduler lock file could not be opened at
+    /// all. For a TUI this degrades (§18.3: render without scheduling);
+    /// for a daemon, which exists to schedule, it is fatal. Numbered
+    /// alongside `E903` in the 9xx accommodation range.
+    #[error("the scheduler lock could not be acquired")]
+    SchedulerLockFailed {
+        /// Why the lock could not be opened (errno text).
+        cause: String,
+    },
     /// `E000` — the command's service arrives in a later phase (§23).
     /// Transient: exists only while phases land one at a time.
     #[error("{command} is not implemented yet")]
@@ -179,6 +201,8 @@ impl SalatError {
             SalatError::DatabaseFailed => "E601",
             SalatError::RuntimeStartFailed { .. } => "E901",
             SalatError::TerminalIo { .. } => "E902",
+            SalatError::SchedulerConflict { .. } => "E903",
+            SalatError::SchedulerLockFailed { .. } => "E904",
         }
     }
 
@@ -203,6 +227,8 @@ impl SalatError {
             SalatError::DatabaseFailed => "DATABASE ERROR",
             SalatError::RuntimeStartFailed { .. } => "RUNTIME START FAILED",
             SalatError::TerminalIo { .. } => "TERMINAL I/O FAILED",
+            SalatError::SchedulerConflict { .. } => "SCHEDULER ALREADY RUNNING",
+            SalatError::SchedulerLockFailed { .. } => "SCHEDULER LOCK FAILED",
         }
     }
 
@@ -253,6 +279,16 @@ impl SalatError {
             SalatError::DatabaseFailed => vec!["→ the cache database is unusable".into()],
             SalatError::RuntimeStartFailed { cause } => vec![format!("→ {cause}")],
             SalatError::TerminalIo { cause } => vec![format!("→ {cause}")],
+            SalatError::SchedulerConflict { pid, started_at } => {
+                let when = started_at
+                    .map(|at| at.to_rfc3339())
+                    .unwrap_or_else(|| "unknown time".into());
+                vec![
+                    format!("→ held by pid {pid} since {when}"),
+                    "→ stop the running salat (or its systemd unit) first".into(),
+                ]
+            }
+            SalatError::SchedulerLockFailed { cause } => vec![format!("→ {cause}")],
             SalatError::NotImplemented { command } => {
                 vec![format!("→ {command} arrives in a later phase (§23)")]
             }
@@ -305,6 +341,10 @@ impl SalatError {
             SalatError::DatabaseFailed => &[ErrorAction::Retry, ErrorAction::Back],
             SalatError::RuntimeStartFailed { .. } => &[ErrorAction::Retry, ErrorAction::Back],
             SalatError::TerminalIo { .. } => &[ErrorAction::Back],
+            // A retry re-arms the lock race: the holder may be gone by
+            // the time the user acts — the same bet every Retry makes.
+            SalatError::SchedulerConflict { .. } => &[ErrorAction::Retry, ErrorAction::Back],
+            SalatError::SchedulerLockFailed { .. } => &[ErrorAction::Retry, ErrorAction::Back],
             SalatError::NotImplemented { .. } => &[ErrorAction::Back],
         }
     }
@@ -377,6 +417,13 @@ mod tests {
             SalatError::TerminalIo {
                 cause: "inappropriate ioctl for device".into(),
             },
+            SalatError::SchedulerConflict {
+                pid: 4242,
+                started_at: None,
+            },
+            SalatError::SchedulerLockFailed {
+                cause: "permission denied".into(),
+            },
             SalatError::NotImplemented { command: "status" },
         ]
     }
@@ -398,7 +445,7 @@ mod tests {
             assert!(!err.help().is_empty(), "no help for {code}");
             assert!(!err.actions().is_empty(), "no actions for {code}");
         }
-        assert_eq!(seen.len(), 18);
+        assert_eq!(seen.len(), 20);
     }
 
     /// The §14.5 exit-code mapping: E201/E202 → 3, E301–E304 → 4, the rest
@@ -426,6 +473,21 @@ mod tests {
             (SalatError::LocationLookupFailed, ExitCode::Runtime),
             (SalatError::AudioNoPlayer, ExitCode::Runtime),
             (SalatError::DatabaseFailed, ExitCode::Runtime),
+            (
+                SalatError::SchedulerConflict {
+                    pid: 4242,
+                    started_at: None,
+                },
+                // 1, not 3: a live holder is not this daemon's broken
+                // config — `Restart=on-failure` may sensibly retry it.
+                ExitCode::Runtime,
+            ),
+            (
+                SalatError::SchedulerLockFailed {
+                    cause: "permission denied".into(),
+                },
+                ExitCode::Runtime,
+            ),
             (
                 SalatError::NotImplemented { command: "full" },
                 ExitCode::Runtime,

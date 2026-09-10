@@ -95,7 +95,7 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, SalatError> {
         Some(Command::Status) => commands::status::run(&cli),
         Some(Command::Config { edit }) => commands::config::run(*edit, cli.config.as_deref()),
         Some(Command::TestAdhan) => commands::test_adhan::run(&cli),
-        Some(Command::Daemon { once }) => commands::daemon::run(*once),
+        Some(Command::Daemon { once }) => commands::daemon::run(&cli, *once),
         None => {
             if cli.full {
                 commands::full::run(&cli)
