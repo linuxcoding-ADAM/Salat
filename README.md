@@ -1,6 +1,23 @@
+<div align="center">
+
 # Salat
 
-**Prayer times and Adhan for the Linux terminal.**
+**Prayer times and Adhan for the Linux terminal**
+
+A keyboard-first Ratatui TUI with offline city search, notifications, and a systemd daemon.
+
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![Rust 1.97+](https://img.shields.io/badge/rust-1.97%2B-orange?logo=rust)](rust-toolchain.toml)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational?logo=linux&logoColor=white)](#install)
+[![Built with Ratatui](https://img.shields.io/badge/built%20with-Ratatui-8A2BE2)](https://ratatui.rs)
+[![Prayer times: AlAdhan](https://img.shields.io/badge/prayer%20times-AlAdhan-2E8B57)](https://aladhan.com)
+[![Status: pre-release](https://img.shields.io/badge/status-pre--release-yellow)](#status-and-roadmap)
+
+`rust` · `ratatui` · `tui` · `terminal` · `terminal-app` · `cli` · `linux` · `systemd` · `prayer-times` · `adhan` · `aladhan` · `islam` · `salat`
+
+</div>
+
+---
 
 Salat is a keyboard-first, terminal-native assistant written in Rust with
 [Ratatui](https://ratatui.rs). It answers one question instantly — *when is
