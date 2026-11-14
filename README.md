@@ -24,7 +24,10 @@ small curated list of verified places GeoNames carries no population for
 ## Status
 
 Under active development, phase by phase per `docs/ARCHITECTURE.md`.
-See `CHANGELOG.md` for what works today.
+Today's `main` has the quick view, the full TUI, offline city search,
+AlAdhan prayer times, prayer notifications and Adhan playback, the system
+status screen and command, and the headless daemon with its systemd unit
+(see `docs/INSTALL.md`). Packaging is next. See `CHANGELOG.md` for details.
 
 ## Install
 
