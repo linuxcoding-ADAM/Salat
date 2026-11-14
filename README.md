@@ -368,3 +368,5 @@ are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 Dual-licensed under **MIT OR Apache-2.0**, at your option. See
 [`LICENSE`](LICENSE). Third-party notices are in
 [`LICENSE-THIRD-PARTY`](LICENSE-THIRD-PARTY).
+
+made with love by M.A
