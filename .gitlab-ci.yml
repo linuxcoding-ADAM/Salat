@@ -1,0 +1,181 @@
+# GitLab CI/CD — the check jobs of docs/ARCHITECTURE.md §22.1.
+#
+# GitLab CI/CD is Salat's CI/CD provider; GitHub stays the canonical
+# repository (§28 D1). These are the same five checks the plan has always
+# required (§20.5): fmt, clippy, tests, the musl release build, shellcheck,
+# cargo-deny, and the MSRV check. The release jobs of §22.2 arrive in
+# Phase 14 and are deliberately absent here.
+#
+# Free-tier notes (§28 D6): jobs run on GitLab's default shared runner
+# (saas-linux-small-amd64); cargo-deny, cross and the Docker CLI are
+# downloaded as prebuilt, checksum-verified releases instead of being
+# compiled; only the cargo registry and git dependency downloads are
+# cached, per job, keyed on Cargo.lock (target/ is not — see .rust below).
+# Every image is pinned by digest (§21.5).
+
+workflow:
+  rules:
+    # Merge requests get a merge-request pipeline...
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # ...so a branch with an open MR does not run a second, duplicate one.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    # Tag pipelines re-run the five checks (§22.2).
+    - if: $CI_COMMIT_TAG
+
+stages:
+  - check
+
+variables:
+  # Keep cargo's home inside the project directory so GitLab can cache it.
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo-home
+  CARGO_TERM_COLOR: always
+  # Incremental artifacts are useless across CI runs and bloat the cache
+  # (the same setting Swatinem/rust-cache applies).
+  CARGO_INCREMENTAL: "0"
+  DEBIAN_FRONTEND: noninteractive
+  RUST_IMAGE: rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c
+
+default:
+  # With the project's auto-cancel setting (enabled), a newer pipeline on
+  # the same ref cancels this one — the equivalent of the workflow's
+  # `concurrency: cancel-in-progress`.
+  interruptible: true
+
+# Shared setup for the jobs that run cargo. rust-toolchain.toml pins the
+# channel (1.97.1, the image's own toolchain), so every job builds with the
+# compiler the plan pins (§5.4).
+#
+# Only the download caches are kept: the cargo registry and git
+# dependency checkouts. target/ is deliberately not cached — after the
+# check job it measured 4.9 GB, which costs more to archive, upload and
+# restore on GitLab's shared runners than recompiling saves.
+.rust:
+  image: $RUST_IMAGE
+  cache:
+    key:
+      files: [Cargo.lock]
+      prefix: $CI_JOB_NAME
+    paths:
+      - .cargo-home/registry/index/
+      - .cargo-home/registry/cache/
+      - .cargo-home/git/db/
+  before_script:
+    - rustc --version
+    - cargo --version
+
+check:
+  extends: .rust
+  stage: check
+  script:
+    # procps provides /bin/kill, which the daemon tests call.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends procps
+    - rustup component add rustfmt clippy
+    - cargo fmt --all --check
+    - cargo clippy --all-targets --all-features -- -D warnings
+    # The tests run as an unprivileged user. GitLab jobs run as root, and
+    # root ignores permission bits, so the permission tests (an unreadable
+    # Adhan file, a read-only config directory) only mean anything without
+    # it. The id check fails the job rather than letting tests run as root.
+    - useradd --create-home --shell /bin/sh salat-ci
+    - chown -R salat-ci "$CI_PROJECT_DIR"
+    - >-
+      HOME=/home/salat-ci setpriv --reuid=salat-ci --regid=salat-ci --init-groups
+      sh -c 'test "$(id -u)" -ne 0 && cargo test --all-features'
+
+build-musl:
+  extends: .rust
+  stage: check
+  services:
+    - name: docker:29-dind@sha256:4bbc7223f81db790097c6dea42fb93e05b8fead4f0431fbe6ccaba6e8473201c
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: /certs
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: /certs/client
+    # The Docker daemon runs in the dind service container, so the project
+    # directory is not visible to it; cross's remote mode copies the
+    # project and toolchain into Docker volumes instead of bind-mounting.
+    CROSS_REMOTE: "1"
+    DOCKER_VERSION: 29.10.0
+    DOCKER_SHA256: 7c1ebadc65c716cdc6d35fc78759ed0e4317debf43c21dd12f066f2006999def
+    CROSS_VERSION: v0.2.5
+    CROSS_SHA256: a486cefa6cb486971b97be321ea9dfc2e90c1979550295314a368f53fab6d588
+  # With CROSS_REMOTE the target directory lives in a Docker volume, so
+  # only the cargo registry is worth caching here.
+  cache:
+    key:
+      files: [Cargo.lock]
+      prefix: $CI_JOB_NAME
+    paths:
+      - .cargo-home/registry/index/
+      - .cargo-home/registry/cache/
+      - .cargo-home/git/db/
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates
+    - mkdir -p /tmp/tools && cd /tmp/tools
+    - curl -fsSLo docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz"
+    - echo "${DOCKER_SHA256}  docker.tgz" | sha256sum -c -
+    - tar -xzf docker.tgz docker/docker && install -m 0755 docker/docker /usr/local/bin/docker
+    - curl -fsSLo cross.tgz "https://github.com/cross-rs/cross/releases/download/${CROSS_VERSION}/cross-x86_64-unknown-linux-musl.tar.gz"
+    - echo "${CROSS_SHA256}  cross.tgz" | sha256sum -c -
+    - tar -xzf cross.tgz cross && install -m 0755 cross /usr/local/bin/cross
+    - cd "$CI_PROJECT_DIR"
+    # cross looks for rustup in $CARGO_HOME/bin, but CARGO_HOME is moved
+    # into the project (for the cache) while the image's rustup and cargo
+    # live in the image's own cargo home; link them in.
+    - mkdir -p "$CARGO_HOME/bin" && ln -sf "$(dirname "$(command -v rustup)")"/* "$CARGO_HOME/bin/"
+    - docker version
+    - cross --version
+    - cross build --release --target x86_64-unknown-linux-musl
+
+lint-shell:
+  stage: check
+  image: koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002
+  script:
+    # install.sh ships in Phase 14; until it exists there is nothing to
+    # lint, so the job documents the skip instead of failing.
+    - |
+      if [ ! -f install.sh ]; then
+        echo "install.sh not present yet (Phase 14); skipping shellcheck"
+        exit 0
+      fi
+      shellcheck install.sh
+
+supply-chain:
+  extends: .rust
+  stage: check
+  variables:
+    CARGO_DENY_VERSION: 0.20.2
+    CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+  cache:
+    key:
+      files: [Cargo.lock]
+      prefix: $CI_JOB_NAME
+    paths:
+      - .cargo-home/registry/index/
+      - .cargo-home/registry/cache/
+      - .cargo-home/git/db/
+      - .cargo-home/advisory-dbs/
+  script:
+    # git: cargo-deny clones the RustSec advisory database with it, and
+    # the slim image does not ship git.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates git
+    - mkdir -p /tmp/tools && cd /tmp/tools
+    - curl -fsSLo cargo-deny.tgz "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+    - echo "${CARGO_DENY_SHA256}  cargo-deny.tgz" | sha256sum -c -
+    - tar -xzf cargo-deny.tgz --strip-components=1 "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
+    - install -m 0755 cargo-deny /usr/local/bin/cargo-deny
+    - cd "$CI_PROJECT_DIR"
+    - cargo deny --version
+    - cargo deny check advisories bans licenses sources
+
+msrv:
+  extends: .rust
+  stage: check
+  script:
+    # rust-toolchain.toml pins the channel; rust-version in salat/Cargo.toml
+    # is asserted by the build itself.
+    - cargo check --workspace --all-targets
