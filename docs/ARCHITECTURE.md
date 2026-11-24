@@ -1923,11 +1923,10 @@ salat/
 ├── LICENSE                       # MIT OR Apache-2.0
 ├── LICENSE-THIRD-PARTY           # GeoNames CC-BY 4.0 attribution
 │
+├── .gitlab-ci.yml                # GitLab CI/CD (§22, §28 D1): fmt · clippy · test · shellcheck · deny · build;
+│                                 # tag → cross-build → checksums → verify → manual GitHub Release
 ├── .github/
-│   ├── workflows/
-│   │   ├── ci.yml                # fmt · clippy · test · shellcheck · deny · build
-│   │   └── release.yml           # tag → cross-build → checksums → GitHub Release
-│   └── ISSUE_TEMPLATE/{bug_report.md,feature_request.md}
+│   └── ISSUE_TEMPLATE/{bug_report.md,feature_request.md}   # issues stay on GitHub (canonical)
 │
 ├── docs/
 │   ├── ARCHITECTURE.md           # this document
@@ -2092,7 +2091,7 @@ A checklist in `CONTRIBUTING.md`, executed per phase (§24) and before every rel
 
 ### 20.5 CI gates
 
-`cargo fmt --check` · `cargo clippy --all-targets --all-features -- -D warnings` · `cargo test --all-features` · `shellcheck install.sh` · `cargo deny check` · `cargo build --release --target x86_64-unknown-linux-musl`. All six must pass on every PR; the release workflow re-runs them before publishing.
+`cargo fmt --check` · `cargo clippy --all-targets --all-features -- -D warnings` · `cargo test --all-features` · `shellcheck install.sh` · `cargo deny check` · `cargo build --release --target x86_64-unknown-linux-musl`. All six must pass in the GitLab CI/CD pipeline for every commit before that commit is pushed to GitHub (§22.1); the tag pipeline re-runs them before any release artifact is built (§22.2).
 
 ---
 
@@ -2190,46 +2189,61 @@ A **user** unit (`systemctl --user`), not a system unit — it needs the session
 | Audio | `Command::new(player).args([...])` — argv only, never a shell string; the configured path is validated as an existing regular file, so no argument injection through the config |
 | Notifications | Body text is built from local data only; any string of external origin is HTML-escaped, since the D-Bus spec permits limited markup |
 | Config & data | `0600` files, `0700` directories, atomic same-directory `rename`, no world-readable temp files; coordinates logged at `debug!` only |
-| Supply chain | `Cargo.lock` committed, `cargo deny check` and `cargo audit` in CI, GitHub Actions pinned by commit SHA, release job with `permissions: contents: write` and nothing else |
+| Supply chain | `Cargo.lock` committed, `cargo deny check` and `cargo audit` in CI, CI container images pinned by digest (GitLab CI/CD, §22), and the release credential a GitHub token limited to this repository's contents (write) and nothing else, readable only by the manual publish job on protected tags (§22.2) |
 | Privacy | No telemetry, no analytics, no crash reporting. `README.md` discloses plainly that coordinates, method and school are sent to `api.aladhan.com` and nothing else leaves the machine |
 
 The one residual trust decision is the `curl | sh` pattern itself. It is mitigated, not eliminated: the script is short, readable, and served from the same repository the user is trusting for the binary; the README shows the two-step alternative (`curl -O`, read, `sh install.sh`) first for readers who prefer it; and every URL and digest the script uses is printed as it runs.
 
 ---
 
-## 22. GitHub Actions and release architecture
+## 22. CI/CD and release architecture (GitLab CI/CD)
 
-### 22.1 `ci.yml` — every push and PR
+> **Provider.** CI/CD runs on **GitLab CI/CD** in the project `gitlab.com/linuxcoding-ADAM/salat`. **GitHub Actions is not used.** **GitHub (`github.com/linuxcoding-ADAM/salat`) remains the canonical repository**: the source of truth for code, tags, issues, the installer's raw URL (§21.1), and the Releases the installer downloads from. Only the provider changed. The jobs, gates, tarball layout, asset names and release procedure below are the ones this section always specified, expressed for GitLab. The reasons and constraints are recorded in §28.
 
-```yaml
-name: ci
-on:
-  push:    { branches: [main] }
-  pull_request:
-concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }
-permissions: { contents: read }
-jobs:
-  check:       # fmt --check · clippy -D warnings · cargo test --all-features
-  build-musl:  # cargo build --release --target x86_64-unknown-linux-musl (via cross)
-  lint-shell:  # shellcheck install.sh
-  supply-chain:# cargo deny check advisories bans licenses sources
-  msrv:        # cargo check with the rust-toolchain.toml pinned version
-```
+### 22.1 Check jobs — every push and merge request
 
-`Swatinem/rust-cache` for the target directory. All five jobs are required checks on `main`.
-
-### 22.2 `release.yml` — triggered by a version tag
+`.gitlab-ci.yml`, check stage. The outline below lists the jobs; it is not literal GitLab syntax:
 
 ```yaml
-on: { push: { tags: ['v*.*.*'] } }
-permissions: { contents: write }
-jobs:
-  verify:   # assert Cargo.toml version == tag (fail fast, before building anything)
-  build:    # matrix: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-  release:  # aggregate SHA256SUMS, create the GitHub Release
+workflow:          # pipelines run for branch pushes, merge requests and tags
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+default:
+  interruptible: true   # with auto-cancel, a newer pipeline on the same ref cancels this one
+# jobs
+#   check:         fmt --check · clippy --all-targets --all-features -D warnings · cargo test --all-features
+#   build-musl:    cargo build --release --target x86_64-unknown-linux-musl (via cross, Docker-in-Docker service)
+#   lint-shell:    shellcheck install.sh
+#   supply-chain:  cargo deny check advisories bans licenses sources
+#   msrv:          cargo check with the rust-toolchain.toml pinned version
 ```
 
-**`verify`** exists because the single most common release mistake is a tag that disagrees with `Cargo.toml`, producing a `v0.2.0` release whose binary reports `0.1.0`. It reads the version with `cargo metadata` and compares against `${GITHUB_REF_NAME#v}`, failing in ten seconds rather than after two cross-compiles.
+GitLab's `cache:` (keyed on `Cargo.lock`, holding the cargo home and `target/`) replaces `Swatinem/rust-cache`. All five jobs must pass.
+
+**The merge gate.** GitLab cannot enforce required checks on GitHub branches, so the gate is a fixed procedure rather than a branch-protection setting. Every commit is pushed to the `gitlab` remote first. Only when its pipeline is green is the **same commit** pushed to `origin` (GitHub). The two remotes stay separate: `origin` is GitHub, `gitlab` is GitLab, and `origin` never carries a second push URL (§28 D2).
+
+### 22.2 Release jobs — triggered by a version tag
+
+Tag pipelines run for two tag forms, both validated against `Cargo.toml`:
+
+| Tag form | Example | Pipeline runs | Publishes a GitHub Release |
+|---|---|---|---|
+| Stable `vMAJOR.MINOR.PATCH` | `v0.1.0` | every job below | only when the manual `publish` job is started by hand |
+| SemVer prerelease `vMAJOR.MINOR.PATCH-PRE` | `v0.1.0-rc.1` | every job below except `publish` | **never**: the job is not created for prerelease tags |
+
+```yaml
+# jobs (tag pipelines only)
+#   verify:            assert Cargo.toml version == tag (fail fast, before building anything)
+#   check jobs:        the five §22.1 jobs, re-run
+#   build:             matrix: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+#   checksums:         aggregate SHA256SUMS
+#   verify-artifacts:  the installer tests of Phase 14 against this pipeline's own artifacts
+#   publish:           manual, stable tags only: create the GitHub Release
+```
+
+**`verify`** exists because the single most common release mistake is a tag that disagrees with `Cargo.toml`, producing a `v0.2.0` release whose binary reports `0.1.0`. It reads the version with `cargo metadata` and requires `${CI_COMMIT_TAG#v}` to equal it **exactly**. It accepts any version Cargo accepts, including a SemVer prerelease suffix, so `v0.1.0-rc.1` passes only when `Cargo.toml` says `0.1.0-rc.1`. It fails in ten seconds rather than after two cross-compiles.
 
 **`build`** (per target): install the toolchain, build with `cross` (musl cross-linking without hand-managed sysroots), `strip`, assemble a staging directory, and produce:
 
@@ -2243,9 +2257,13 @@ salat-<version>-<target>.tar.gz
         └── salat.service
 ```
 
-The tarball has one top-level directory (no tarbombs), and `install.sh` reads `*/salat` from it. Each job emits its own `.sha256` as an artifact.
+The tarball has one top-level directory (no tarbombs), and `install.sh` reads `*/salat` from it. Each job emits its own `.sha256` as a job artifact.
 
-**`release`**: download all artifacts, concatenate the per-target sums into a single `SHA256SUMS` in `sha256sum -c` format, then `gh release create` with the tarballs plus `SHA256SUMS`, notes extracted from the `CHANGELOG.md` section matching the tag, and `--verify-tag`.
+**`checksums`**: collect the build artifacts and concatenate the per-target sums into a single `SHA256SUMS` in `sha256sum -c` format. The tarballs and `SHA256SUMS` are kept as pipeline artifacts.
+
+**`verify-artifacts`**: runs Phase 14's installer tests (clean containers, tampered checksum, malicious tar member) against those pipeline artifacts. A prerelease tag therefore exercises build, test, packaging, checksums and verification end to end without publishing anything (§28 D4).
+
+**`publish`**: exists only in pipelines for stable tags matching `^v[0-9]+\.[0-9]+\.[0-9]+$`, runs only on protected tags, and is `when: manual`. Publication is always a deliberate human action, never a side effect of pushing a tag. It runs `gh release create` against the canonical GitHub repository. It uploads the two tarballs plus `SHA256SUMS`, uses release notes extracted from the `CHANGELOG.md` section matching the tag, and passes `--verify-tag`, so the tag must already exist on GitHub. Its only credential is a dedicated, least-privilege GitHub token (§28 D5), stored as a masked and protected GitLab CI/CD variable and never printed.
 
 Asset naming, fixed and parseable by the installer:
 
@@ -2261,12 +2279,14 @@ SemVer, `0.y.z` until the config schema is stable. Pre-1.0, a breaking config ch
 
 1. Update `CHANGELOG.md` (Keep a Changelog format) under a new `## [0.2.0] - YYYY-MM-DD` heading.
 2. Bump `version` in `salat/Cargo.toml`; `cargo check` to refresh the lockfile.
-3. Commit `chore(release): 0.2.0`, push to `main`, wait for green CI.
-4. `git tag -a v0.2.0 -m 'salat 0.2.0' && git push origin v0.2.0`.
-5. The workflow verifies, builds both targets, publishes the release.
+3. Commit `chore(release): 0.2.0`, push to `gitlab`, wait for a green pipeline, then push the same commit to `origin` (§22.1).
+4. `git tag -a v0.2.0 -m 'salat 0.2.0' && git push gitlab v0.2.0`.
+5. The tag pipeline verifies, builds both targets, aggregates `SHA256SUMS` and verifies the artifacts. When it is green, `git push origin v0.2.0`, then start the manual `publish` job, which creates the GitHub Release.
 6. Verify the published artifacts by running the real install path on a clean container for both architectures.
 
-**End-to-end path, stated once:** tag `v0.2.0` → `verify` confirms `Cargo.toml` says `0.2.0` → two `cross` builds produce static musl binaries → each is tarred with docs and the unit file → digests are aggregated into `SHA256SUMS` → `gh release create v0.2.0` uploads three assets → `install.sh` resolves `/releases/latest` to `v0.2.0`, downloads the tarball for the detected arch plus `SHA256SUMS`, verifies, extracts, installs to `~/.local/bin/salat`, smoke-tests `--version` → the user runs `salat`.
+A prerelease (`v0.1.0-rc.1`) follows steps 1–5 up to the green tag pipeline and stops. It produces no GitHub Release.
+
+**End-to-end path, stated once:** tag `v0.2.0` → pushed to `gitlab` → `verify` confirms `Cargo.toml` says `0.2.0` → two `cross` builds produce static musl binaries → each is tarred with docs and the unit file → digests are aggregated into `SHA256SUMS` → the artifacts pass the installer tests → the tag is pushed to `origin` → the manual `publish` job runs `gh release create v0.2.0` and uploads three assets to GitHub Releases → `install.sh` resolves `/releases/latest` to `v0.2.0`, downloads the tarball for the detected arch plus `SHA256SUMS`, verifies, extracts, installs to `~/.local/bin/salat`, smoke-tests `--version` → the user runs `salat`.
 
 ### 22.4 Developer setup
 
@@ -2537,17 +2557,17 @@ Each phase specifies the twelve required items: **goal · scope · files · inte
 ### Phase 14 — Packaging, release and installation
 
 1. **Goal.** A user with no Rust toolchain installs Salat with one command, on both architectures.
-2. **Scope.** `install.sh` complete, `ci.yml` finalized, `release.yml`, cross-compilation, tarball assembly, `SHA256SUMS`, and a real end-to-end test of the published path.
-3. **Files.** `install.sh`, `.github/workflows/{ci,release}.yml`, `Cross.toml`, `docs/INSTALL.md`.
+2. **Scope.** `install.sh` complete, the check jobs of `.gitlab-ci.yml` finalized, its release jobs (§22.2), cross-compilation, tarball assembly, `SHA256SUMS`, and a real end-to-end test of the published path.
+3. **Files.** `install.sh`, `.gitlab-ci.yml`, `Cross.toml`, `docs/INSTALL.md`.
 4. **Interfaces.** The CLI contract of §21.2 (`--prefix`, `--version`, `--uninstall`, `--purge`, `--force`, `--help`) and the fixed asset names of §22.2.
 5. **Data models.** None — this phase is shell and YAML.
 6. **Dependencies.** A working binary from Phases 0–13. `cross` in CI.
-7. **Order.** local musl build → tarball layout → `install.sh` (arch detect → tag resolve → download → **verify** → validate members → extract → install → smoke test → PATH advice) → `--uninstall` → `release.yml` → a pre-release tag (`v0.0.1-test`) → verify on clean containers → shellcheck → docs.
-8. **Automated tests.** `shellcheck install.sh` clean; a CI job that runs `install.sh` against the just-built release inside `debian:oldstable` and `alpine` containers for both arches and asserts `salat --version`; a job that mutates `SHA256SUMS` and asserts the installer **refuses to install**; a job asserting a malicious tarball member (`../evil`) is rejected.
+7. **Order.** local musl build → tarball layout → `install.sh` (arch detect → tag resolve → download → **verify** → validate members → extract → install → smoke test → PATH advice) → `--uninstall` → the release jobs of `.gitlab-ci.yml` → a pre-release tag (`v0.1.0-rc.1`, §28 D4) → verify on clean containers → shellcheck → docs.
+8. **Automated tests.** `shellcheck install.sh` clean; a CI job that runs `install.sh` against the just-built release artifacts inside `debian:oldstable` and `alpine` containers for both arches and asserts `salat --version`; a job that mutates `SHA256SUMS` and asserts the installer **refuses to install**; a job asserting a malicious tarball member (`../evil`) is rejected.
 9. **Manual tests.** The exact `curl … | sh` command on Fedora, Ubuntu LTS, Debian oldstable, Arch and Alpine, on x86_64 and aarch64; install → upgrade → uninstall; install with `$HOME/.local/bin` absent from `PATH` and follow the printed advice; run as root and confirm refusal; run with `sha256sum` removed from `PATH` and confirm abort.
-10. **Commands.** `shellcheck install.sh`, `cargo build --release --target x86_64-unknown-linux-musl`, `sh install.sh --prefix /tmp/p`, `sh install.sh --uninstall`, `git tag v0.0.1-test && git push origin v0.0.1-test`.
+10. **Commands.** `shellcheck install.sh`, `cargo build --release --target x86_64-unknown-linux-musl`, `sh install.sh --prefix /tmp/p`, `sh install.sh --uninstall`, `git tag v0.1.0-rc.1 && git push gitlab v0.1.0-rc.1`.
 11. **Expected results.** A single ~4–5 MB gzipped asset per arch; install completes in a few seconds; `salat` is on `PATH`; checksum tampering always aborts.
-12. **DoD.** The full §22.3 path executed for a real test tag; both arches verified on a clean container; the installer refuses every unverified path; `README.md` shows the one-line install.
+12. **DoD.** The full §22.3 path executed for a real test tag, up to and excluding publication (a prerelease tag never publishes — §28 D4); both arches verified on a clean container; the installer refuses every unverified path; `README.md` shows the one-line install.
 
 ---
 
@@ -2746,6 +2766,51 @@ Read this before writing the first line, and again at the start of every phase.
 - Do not skip a phase's acceptance signal because its unit tests pass.
 
 **When something is genuinely ambiguous and this document does not answer it:** choose the smallest implementation that preserves the design's visible behaviour, write down the decision and its reasoning in `docs/ARCHITECTURE.md` under a new "Implementation decisions" section, and keep going. Recording the choice is what keeps the next contributor — or the next session — from silently deciding differently.
+
+---
+
+## 28. Implementation decisions
+
+Decisions made during implementation that this document did not answer, recorded as §27 requires so a later contributor or session does not decide differently.
+
+### D1 — CI/CD provider: GitLab CI/CD (2026-11-24)
+
+**Decision.** GitLab CI/CD is the CI/CD provider for Salat, in the project `gitlab.com/linuxcoding-ADAM/salat`. GitHub Actions is not used.
+
+**What does not change.** GitHub (`github.com/linuxcoding-ADAM/salat`) remains the canonical repository. It holds the code, tags, issues, the installer's raw URL (§21.1) and the Releases `install.sh` downloads from. This is not a migration to GitLab. The GitLab project receives the same commits only so its pipelines can run.
+
+**Scope.** Only the CI/CD provider changed. Every phase in §23, every deliverable, every automated and manual test, the §20.5 gates, the §24 definition of done, the tarball layout and asset names of §22.2, and the installer contract of §21 stay as specified. The edits made for this decision are limited to provider-specific text: §19's directory tree, §20.5, §21.5's supply-chain row, §22, and Phase 14's scope, files, order, tests, commands and DoD.
+
+**Why.** GitHub Actions is not available on this project's GitHub account.
+
+**Record of the past.** Phase 0's file list (§23) still names `.github/workflows/ci.yml`, because that is what Phase 0 built. It is history and stays as written.
+
+### D2 — Two remotes, GitLab first
+
+`origin` is GitHub (canonical) and `gitlab` is GitLab (CI/CD). They stay separate remotes; `origin` never gets a second push URL. Every commit is pushed to `gitlab` first. The same commit goes to `origin` only after its pipeline is green (§22.1). GitLab pull mirroring from GitHub is not used: it is a paid GitLab feature, and pushing to `gitlab` first is what makes the pipeline a gate.
+
+### D3 — `.github/workflows/ci.yml` is retained temporarily
+
+The GitHub Actions workflow stays in the repository until the equivalent GitLab pipeline has been validated and its removal has been approved. It does not run, since GitHub Actions is not used. Until it is removed, §19's tree describes the target state rather than the current one.
+
+### D4 — Prerelease tags verify, they never publish
+
+The Phase 14 test tag is `v0.1.0-rc.1`, replacing the original `v0.0.1-test`. The original tag could never have passed §22.2's `verify` job against `Cargo.toml`'s `0.1.0`. `verify` still requires the tag to equal the `Cargo.toml` version exactly, and now accepts SemVer prerelease versions. So that tag needs `salat/Cargo.toml` at `0.1.0-rc.1` in the tagged commit, which is set during Phase 14.
+
+A prerelease tag runs build, test, packaging, checksums and artifact verification, and **never publishes a GitHub Release**: the `publish` job is not created for it. Publishing is manual (`when: manual`) and limited to stable `vX.Y.Z` tags on protected tags. Phase 14's acceptance signal (§24.2) is therefore shown against the tag pipeline's own artifacts, including the tampered-checksum refusal. The first install from a published Release URL on both architectures is Phase 15's `v0.1.0` acceptance signal, as already specified.
+
+### D5 — The release credential
+
+The `publish` job authenticates to GitHub with a dedicated, least-privilege token. It is a fine-grained GitHub token limited to `linuxcoding-ADAM/salat` with **Contents: read and write** and no other permission. It is stored as a masked and protected GitLab CI/CD variable, so only pipelines on protected tags can read it. It is used only by `publish` and is never printed: no shell tracing in that job, and no echoing of the environment.
+
+### D6 — Designed for GitLab Free
+
+The pipeline is designed for GitLab Free and does not depend on any paid or programme-granted feature. Constraints taken into account:
+
+- **Compute minutes are limited.** Jobs install `cross` and `cargo-deny` from their prebuilt releases rather than compiling them, and use the `Cargo.lock`-keyed cache.
+- **aarch64 runners.** Arm64 shared runners are listed for the project but had not run a job when this was written. aarch64 binaries are built with `cross` on x86_64 either way (§22.2). Only the aarch64 clean-container install test depends on arm64 runners being usable.
+- **Docker-in-Docker.** `cross` needs a Docker-in-Docker service on the shared Linux runners. This is proven by the first pipeline, not assumed.
+- **GitLab for Open Source** may raise these limits. Its eligibility is being investigated, but nothing in this design depends on it.
 
 ---
 

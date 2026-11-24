@@ -17,3 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `$XDG_STATE_HOME/salat/salat.log`, and CI. Every command responds with
   an explicit not-implemented error rather than a panic; the services
   themselves arrive phase by phase.
+
+### Changed
+
+- CI/CD moves to GitLab CI/CD; GitHub Actions is no longer used. GitHub
+  remains the canonical repository and the home of Releases. Only the
+  CI/CD provider changed; the plan's phases and deliverables are unchanged
+  (`docs/ARCHITECTURE.md` §22 and §28).
