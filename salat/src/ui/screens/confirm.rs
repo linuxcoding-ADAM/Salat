@@ -121,9 +121,14 @@ mod tests {
     /// confirmation does not grow with the terminal.
     #[test]
     fn the_confirm_screen_snapshots() {
-        let path = "/home/adammila/.config/salat/config.toml";
+        // The real default path under whatever `$HOME` the test runs
+        // with, so the snapshot's `~/.config/salat/config.toml` comes
+        // from the §16.9 collapse on every machine, not from one
+        // developer's home directory.
+        let home = std::env::var("HOME").expect("$HOME is set where the tests run");
+        let path = format!("{home}/.config/salat/config.toml");
         for (width, height) in [(80u16, 24u16), (100, 30), (120, 35)] {
-            let text = rendered(width, height, path, true).join("\n");
+            let text = rendered(width, height, &path, true).join("\n");
             let mut settings = insta::Settings::clone_current();
             settings.set_snapshot_path(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots"));
             settings.bind(|| insta::assert_snapshot!(format!("confirm_{width}x{height}"), text));

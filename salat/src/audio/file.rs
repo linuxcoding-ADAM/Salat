@@ -190,7 +190,13 @@ mod tests {
                 .mode();
             std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(mode & 0o222))
                 .expect("chmod");
-            if !nix_like_root() {
+            if nix_like_root() {
+                // CI runs the suite as a non-root user precisely so this
+                // branch is not taken there.
+                eprintln!(
+                    "note: running as root; the unreadable-file case needs a non-root user and was not checked"
+                );
+            } else {
                 assert_eq!(validate(&secret), Err(AudioError::NoFile));
             }
         }
@@ -240,11 +246,15 @@ mod tests {
     }
 
     /// `id -u` == 0 means permission checks lie (root reads anything).
+    /// Whether the tests run as root, where permission bits cannot
+    /// make a file unreadable. `id -u` prints the uid followed by a
+    /// newline (`0\n` for root), so the output is trimmed before it is
+    /// compared — the untrimmed two-byte output never matched.
     fn nix_like_root() -> bool {
         std::process::Command::new("id")
             .arg("-u")
             .output()
-            .map(|out| out.stdout.first() == Some(&b'0') && out.stdout.len() == 1)
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim() == "0")
             .unwrap_or(false)
     }
 }

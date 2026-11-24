@@ -1256,7 +1256,13 @@ mod tests {
         /// The `--once` frame at a terminal size: the same render path
         /// [`run_once`] walks, offscreen.
         fn once_frame(model: &UiModel, width: u16, height: u16, colored: bool) -> String {
-            let theme = Theme::from(&model.config.display);
+            // The colour golden pins §14.6's truecolor SGR sequences, so
+            // the mode is set explicitly: the default `auto` would read
+            // the runner's `$COLORTERM` and make the golden depend on
+            // which terminal ran the tests.
+            let mut display = model.config.display.clone();
+            display.color_mode = crate::config::ColorMode::Truecolor;
+            let theme = Theme::from(&display);
             let area = Rect::new(0, 0, width, viewport_height(height));
             let mut buf = Buffer::empty(area);
             render_quick(model, area, &mut buf, &theme);

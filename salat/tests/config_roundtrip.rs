@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::io::Write as _;
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 
 use salat::config::{Config, ConfigDraft, ConfigError, ConfigStore};
@@ -153,6 +154,16 @@ fn read_only_directory_yields_e202_and_preserves_the_old_file() {
     let path = dir.path().join("config.toml");
     let original = salat::config::defaults::default_toml();
     fs::write(&path, original).expect("write original");
+
+    // Root ignores directory permission bits, so a read-only directory
+    // cannot be produced and this test would fail for the wrong reason.
+    // Say so plainly instead of panicking later with a misleading
+    // message; CI runs the suite as a non-root user.
+    assert_ne!(
+        fs::metadata(&path).expect("original").uid(),
+        0,
+        "this test needs a non-root user: root can write into a read-only directory"
+    );
 
     // Read-only for the owner: rename() into the directory fails.
     let mut perms = fs::metadata(dir.path()).expect("dir").permissions();
