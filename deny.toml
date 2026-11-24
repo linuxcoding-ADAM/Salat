@@ -4,6 +4,35 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Exceptions. Each one names a single advisory ID; no category of advisory
+# is waived. Every entry records the dependency, why no fix is possible,
+# and the risk accepted. Review them whenever Cargo.lock changes, and
+# remove any entry whose advisory no longer applies.
+ignore = [
+    # RUSTSEC-2026-0543 — chrono 0.4.45 is unmaintained (chronotope/chrono#1768:
+    # the maintainer is winding down maintenance and recommends jiff).
+    # Kind: unmaintained. No vulnerability is reported, and no maintained
+    # chrono release exists, so there is no upgrade.
+    # Why it stays: §5.1 of docs/ARCHITECTURE.md mandates chrono. It is the
+    # time type throughout the domain (52 of 103 source files), and sqlx
+    # also depends on it through its `chrono` feature, so replacing it with
+    # jiff or time would be an architecture change.
+    # Risk: a future security bug in chrono may never get a fix. Mitigation:
+    # cargo-deny still fails the build on any chrono *vulnerability*
+    # advisory, because only this unmaintained notice is ignored.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; mandated by ARCHITECTURE.md §5.1 and used by sqlx; no fix exists; vulnerabilities still fail the check" },
+    # RUSTSEC-2026-0555 — chrono-tz 0.10.4 is unmaintained (same announcement,
+    # chronotope/chrono#1768). Kind: unmaintained, no upgrade.
+    # Why it stays: §5.1 mandates chrono-tz for IANA zone → Tz conversion.
+    # It is chrono's timezone companion and cannot be swapped without
+    # swapping chrono.
+    # Risk: the IANA timezone data is bundled at build time and will go
+    # stale if no new chrono-tz releases ship. A future rule change for
+    # the user's zone could then be missed. Prayer times themselves come
+    # from AlAdhan with their own offsets (§7.2). Vulnerabilities in
+    # chrono-tz still fail the check.
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained; mandated by ARCHITECTURE.md §5.1 as chrono's timezone companion; no fix exists; vulnerabilities still fail the check" },
+]
 
 [licenses]
 version = 2
