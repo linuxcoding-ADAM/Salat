@@ -57,7 +57,9 @@ debian)
 alpine)
     # GNU tar only to CRAFT the malicious fixtures; removed again before any
     # test so the installer runs against Alpine's own busybox tar.
-    apk add --no-cache tar >/dev/null
+    # busybox-extras only supplies the httpd that serves the test release;
+    # the installer under test still uses Alpine's stock tar and wget.
+    apk add --no-cache tar busybox-extras >/dev/null
     adduser -D -s /bin/sh "$U"
     MKTAR=tar
     ;;
@@ -151,7 +153,11 @@ if [ "$DISTRO" = alpine ]; then
 fi
 
 # --- Serve the fake releases ------------------------------------------------
-busybox httpd -p "127.0.0.1:$PORT" -h "$SRV"
+if [ "$DISTRO" = alpine ]; then
+    httpd -p "127.0.0.1:$PORT" -h "$SRV"
+else
+    busybox httpd -p "127.0.0.1:$PORT" -h "$SRV"
+fi
 i=0
 until busybox wget -q -O /dev/null "http://127.0.0.1:$PORT/$TAG/SHA256SUMS" 2>/dev/null; do
     i=$((i + 1))
