@@ -51,6 +51,18 @@ remove a mistaken tag), an admin sets the ruleset's enforcement to
 it back to *Active*. That is deliberate: there is no bypass to use by
 accident. Do not leave a ruleset disabled.
 
+**Other settings (verified 2026-11-25).**
+
+- GitHub: private vulnerability reporting, secret scanning with push
+  protection, Dependabot alerts and Dependabot security updates are enabled
+  (*Settings → Code security*). `.github/CODEOWNERS` names the owner; it
+  requests review only and enforces nothing, because no rule requires code
+  owner review.
+- GitLab: *CI/CD → General pipelines → "Run pipelines in the parent project
+  for merge requests from a forked project"* is off. The `main` branch and
+  `v*` tags are protected, and `GITHUB_RELEASE_TOKEN` stays protected,
+  masked, hidden and scoped to `release` (see below).
+
 ## Verifying and merging a pull request
 
 Throughout, `N` is the pull request number.

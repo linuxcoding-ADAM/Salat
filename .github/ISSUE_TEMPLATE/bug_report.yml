@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in Salat does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please check [TROUBLESHOOTING](https://github.com/linuxcoding-ADAM/Salat/blob/main/docs/TROUBLESHOOTING.md) and [KNOWN_ISSUES](https://github.com/linuxcoding-ADAM/Salat/blob/main/docs/KNOWN_ISSUES.md) first.
+        **Security vulnerabilities do not belong here.** Use [private vulnerability reporting](https://github.com/linuxcoding-ADAM/Salat/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: Salat version
+      description: Output of `salat --version`.
+      placeholder: salat 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - install.sh (release tarball)
+        - Built from source
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      description: Distribution and version, kernel (`uname -r`), terminal emulator and its size, and whether you run Salat under systemd. Salat supports Linux x86_64 only.
+      placeholder: "Fedora 44, Linux 7.3, kitty 120x40, run directly"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands and keys, starting from a fresh shell.
+      placeholder: |
+        1. salat --full
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and error output
+      description: The full error text (for example `error[E904]`), and `journalctl --user -u salat -e` if you use the service. **Remove anything private first**, such as your city, coordinates, tokens or paths you do not want public.
+      render: text
+    validations:
+      required: false

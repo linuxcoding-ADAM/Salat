@@ -10,6 +10,10 @@ Issues and pull requests go to the canonical repository,
 <https://github.com/linuxcoding-ADAM/Salat>. Salat supports Linux on
 `x86_64` only, so develop and test there.
 
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md). For help see
+[`SUPPORT.md`](SUPPORT.md); report vulnerabilities privately as described in
+[`SECURITY.md`](SECURITY.md), never in a public issue.
+
 Maintainers: the procedure for verifying and merging a pull request is in
 [`docs/MAINTAINING.md`](docs/MAINTAINING.md).
 

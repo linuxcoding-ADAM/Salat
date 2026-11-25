@@ -15,7 +15,17 @@ A keyboard-first Ratatui TUI with offline city search, notifications, and a syst
 
 `rust` · `ratatui` · `tui` · `terminal` · `terminal-app` · `cli` · `linux` · `systemd` · `prayer-times` · `adhan` · `aladhan` · `islam` · `salat`
 
+<br>
+
+<img src="docs/images/dashboard.png" alt="Salat full dashboard: countdown to the next prayer and today's prayer times" width="900">
+
 </div>
+
+Install the latest release (Linux x86_64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh | sh
+```
 
 ---
 

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help using Salat
+    url: https://github.com/linuxcoding-ADAM/Salat/blob/main/SUPPORT.md
+    about: Read the support guide and the troubleshooting page first.
+  - name: Report a security vulnerability (private)
+    url: https://github.com/linuxcoding-ADAM/Salat/security/advisories/new
+    about: Do not open a public issue for a vulnerability. Use private vulnerability reporting.
