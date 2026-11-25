@@ -2242,12 +2242,13 @@ Tag pipelines run for two tag forms, both validated against `Cargo.toml`:
 ```yaml
 # jobs in tag pipelines (names as implemented in .gitlab-ci.yml)
 #   verify-version:   assert Cargo.toml version == tag (fail fast; build-musl waits for it)
-#   auth-check:       prerelease tags only: a read-only check that the release token works
+#   auth-check:       prerelease protected tags only, MANUAL: a read-only check that the release token works
+#   token-isolation / release-guard / release-scripts-test:  keep the release token away from ordinary jobs (§28 D5)
 #   check jobs:       the five §22.1 jobs, re-run
 #   build-musl:       x86_64-unknown-linux-musl (aarch64 deferred — §28 D8)
 #   package:          verify the binary, build the tarball and SHA256SUMS
 #   verify-installer-debian / -alpine:  the installer tests of Phase 14 against this pipeline's own artifacts
-#   publish:          manual, stable protected tags only: create the GitHub Release
+#   publish:          MANUAL, stable protected tags only, after every validation job: create the GitHub Release
 ```
 
 The original plan named these jobs `verify`, `build`, `checksums` and `verify-artifacts`; §28 D4 still uses the name `verify`.
@@ -2272,9 +2273,9 @@ The tarball has one top-level directory (no tarbombs), and `install.sh` reads `*
 
 **`verify-installer-debian`** and **`verify-installer-alpine`** run Phase 14's installer tests (clean containers, tampered checksum, malicious tar member) against those pipeline artifacts. A prerelease tag therefore exercises build, test, packaging, checksums and verification end to end without publishing anything (§28 D4).
 
-**`auth-check`** runs on prerelease tags only. It makes one read-only GitHub API call with the release token and requires it to be accepted with write access to the repository, so a broken credential is found before a stable release, without publishing anything.
+**`auth-check`** exists only for prerelease tags on protected refs and is `when: manual`. When a maintainer presses Run it makes one read-only GitHub API call with the release token and requires it to be accepted with write access to the repository, so a broken credential is found before a stable release, without publishing anything. It needs the token because testing the credential is its purpose; what changed is that it no longer receives it automatically.
 
-**`publish`**: exists only in pipelines for stable tags matching `^v[0-9]+\.[0-9]+\.[0-9]+$`, runs only on protected tags, and is `when: manual`. Publication is always a deliberate human action, never a side effect of pushing a tag. It runs `gh release create` against the canonical GitHub repository. It uploads the x86_64 tarball plus `SHA256SUMS` (one tarball while aarch64 is deferred — §28 D8), uses release notes extracted from the `CHANGELOG.md` section matching the tag, and passes `--verify-tag`, so the tag must already exist on GitHub. Its only credential is a dedicated, least-privilege GitHub token (§28 D5), stored as a masked and protected GitLab CI/CD variable and never printed.
+**`publish`**: exists only in pipelines for stable tags matching `^v[0-9]+\.[0-9]+\.[0-9]+$`, runs only on protected tags, and is `when: manual`. Publication is always a deliberate human action, never a side effect of pushing a tag. It runs `gh release create` against the canonical GitHub repository. It uploads the x86_64 tarball plus `SHA256SUMS` (one tarball while aarch64 is deferred — §28 D8), uses release notes extracted from the `CHANGELOG.md` section matching the tag, and passes `--verify-tag`, so the tag must already exist on GitHub. It `needs` every validation job (`verify-version`, `check`, `msrv`, `supply-chain`, `lint-shell`, `token-isolation`, `release-scripts-test`, `release-guard`, `package` and both installer jobs), so it cannot be started while any of them has failed (a manual job whose needed job failed is `Unplayable`). It asks for confirmation, belongs to the `release` resource group so two releases cannot run at once, and before creating anything checks, read-only, that the token has push access, that the tag exists on GitHub and points at the commit this pipeline verified, and that no release for the tag exists. Its only credential is a dedicated, least-privilege GitHub token (§28 D5), received only after the manual start and never printed.
 
 Asset naming, fixed and parseable by the installer:
 
@@ -2813,7 +2814,9 @@ A prerelease tag runs build, test, packaging, checksums and artifact verificatio
 
 ### D5 — The release credential
 
-The `publish` job authenticates to GitHub with a dedicated, least-privilege token. It is a fine-grained GitHub token limited to `linuxcoding-ADAM/Salat` with **Contents: read and write** and no other permission. It is stored as a masked and protected GitLab CI/CD variable, so only pipelines on protected tags can read it. It is used only by `publish` and is never printed: no shell tracing in that job, and no echoing of the environment.
+The `publish` job authenticates to GitHub with a dedicated, least-privilege token. It is a fine-grained GitHub token limited to `linuxcoding-ADAM/Salat` with **Contents: read and write** and no other permission. It is stored as a GitLab CI/CD variable that is **protected** (only pipelines on protected branches and tags), **masked and hidden**, and **scoped to the `release` environment**. It is used only by `publish` and `auth-check` and is never printed: no shell tracing in those jobs, and no echoing of the environment.
+
+*Scope and approval (2026-11-25).* Before this change the scope was `*`, so every job on `main` or a `v*` tag, including `cargo test`, received the token. The variable is now scoped to `release` and only `auth-check` and `publish` declare `environment: release`; both are `when: manual` on protected tags. Verified on throwaway refs, GitLab only: an ordinary job on a protected tag received the token under scope `*` and did not under scope `release`; a manual `environment: release` job received it only after it was started; the same job could not be started after a failed validation job; and a job with `environment: release` on an unprotected branch did not receive it (observed under the old `*` scope, which shows the protected-variable rule applies independently of the scope). GitLab Free has no protected environments or deployment approvals (Premium and Ultimate only), so the approval is a Maintainer pressing Run on a protected tag; there is no second approver. `token-isolation` asserts in every pipeline that ordinary jobs do not see the token, `release-guard` fails if the CI file stops matching this shape, and `release-scripts-test` exercises the release scripts with a fake `gh`. These catch accidents: a reviewed-and-merged change to `.gitlab-ci.yml` or `ci/` still runs with the token at release time, so those files need a line-by-line review.
 
 ### D6 — Designed for GitLab Free
 

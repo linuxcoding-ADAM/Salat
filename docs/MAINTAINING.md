@@ -179,6 +179,34 @@ Maintainer checklist — PR #<N> @ <SHA>
 | A push to `main` is rejected with `GH013` | A repository rule blocked it: a force-push or deletion. Pull and fast-forward instead. |
 | The pull request is not marked merged after `main` advanced | Close it with a link to the commit that contains its changes. |
 
+## The release token
+
+`GITHUB_RELEASE_TOKEN` (a fine-grained GitHub token, Contents read and write
+on this repository) is a GitLab variable that is protected, masked, hidden,
+and **scoped to the `release` environment**. Which jobs can receive it:
+
+| Job | When | Receives the token |
+|---|---|---|
+| every ordinary job (`check`, `build-musl`, `package`, the installers, …) | automatically | never |
+| `auth-check` | prerelease protected tags, **manual** | only after you press Run |
+| `publish` | stable protected tags, **manual**, after every validation job | only after you press Run |
+
+GitLab Free has no protected environments or deployment approvals, so
+"approval" here means a Maintainer pressing Run on a protected tag; there is
+no second approver. Three jobs guard the arrangement and run in every
+pipeline: `token-isolation` fails if an ordinary job can see the token,
+`release-guard` fails if `.gitlab-ci.yml` stops matching the approved shape
+(only `auth-check` and `publish` may declare `environment: release`, both
+manual and limited to protected tags), and `release-scripts-test` runs the
+release scripts against a fake `gh`.
+
+These checks catch accidents, not a deliberate edit: a change to
+`.gitlab-ci.yml` or `ci/` that is merged runs with the token at release time.
+Read every such diff line by line, as the triage step above says.
+
+Details and the verification that was done are in
+[`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §28 D5.
+
 ## Releases
 
 Releases follow the procedure in

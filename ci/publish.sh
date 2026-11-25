@@ -4,6 +4,10 @@
 # artifacts. Manual, protected tags only. The tag must already exist on
 # GitHub (--verify-tag). The token is read from GITHUB_RELEASE_TOKEN by
 # gh as GH_TOKEN and is never printed; no shell tracing here.
+#
+# Before it creates anything it makes read-only GitHub checks: the token has
+# push access, the tag exists on GitHub AND points at the commit this pipeline
+# verified, and no release for the tag exists yet.
 set -eu
 
 REPO=linuxcoding-ADAM/Salat
@@ -33,6 +37,21 @@ grep -q '[^[:space:]]' "$notes" \
 
 GH_TOKEN=$GITHUB_RELEASE_TOKEN
 export GH_TOKEN
+
+# Preflight (read-only): nothing is created unless all of these hold.
+push=$(gh api "repos/$REPO" --jq .permissions.push 2>/dev/null) || push=""
+[ "$push" = true ] \
+    || { echo "publish: the token has no push access to $REPO — refusing" >&2; exit 1; }
+gh_sha=$(gh api "repos/$REPO/commits/$tag" --jq .sha 2>/dev/null) || gh_sha=""
+[ -n "$gh_sha" ] \
+    || { echo "publish: tag $tag is not on GitHub yet — push it first" >&2; exit 1; }
+[ "$gh_sha" = "${CI_COMMIT_SHA:-}" ] \
+    || { echo "publish: GitHub's $tag points at a different commit than this pipeline verified — refusing" >&2; exit 1; }
+if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+    echo "publish: a release for $tag already exists — refusing" >&2
+    exit 1
+fi
+
 gh release create "$tag" "$asset" dist/SHA256SUMS \
     --repo "$REPO" --verify-tag --title "Salat ${version}" --notes-file "$notes"
 echo "publish: OK — release $tag created on $REPO"

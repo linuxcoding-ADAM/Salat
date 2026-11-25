@@ -16,9 +16,19 @@
 #            created only once install.sh exists
 #
 #   release  publish   manual, stable vX.Y.Z protected tags only (§22.2)
+#            auth-check manual, prerelease protected tags only
 #
 # Tag pipelines also run verify-version (tag == Cargo version, fails in
-# seconds, gates build-musl) and, on prerelease tags only, auth-check.
+# seconds, gates build-musl).
+#
+# The release token (GITHUB_RELEASE_TOKEN) is scoped to the `release`
+# environment and protected. Only auth-check and publish declare that
+# environment, both are `when: manual` on protected tags, so no other job ever
+# receives it and neither runs until a Maintainer presses Run. token-isolation
+# asserts that in every pipeline; release-guard keeps the CI file in that shape;
+# release-scripts-test exercises the release scripts with a fake gh. On GitLab
+# Free there are no protected environments or deployment approvals: the
+# approval is the manual Run (docs/ARCHITECTURE.md §28 D5).
 #
 # Artifacts flow strictly build-musl → package → verify-installer-* via
 # `needs`; nothing downstream recompiles. aarch64 is deferred (§28 D8).
@@ -60,6 +70,10 @@ variables:
   # debian:oldstable is bookworm; the dated tag names the exact build.
   DEBIAN_IMAGE: debian:oldstable-20261123-slim@sha256:9edc463cb71d29a0ca408fa1959c4123379438970d62f4760fa19da805b14933
   ALPINE_IMAGE: alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+  # GitHub CLI for the publish job: installed from its official release and
+  # checked against this pinned digest (ci/install-gh.sh), not from apk.
+  GH_VERSION: 2.97.0
+  GH_SHA256: a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
 
 default:
   # With the project's auto-cancel setting (enabled), a newer pipeline on
@@ -274,6 +288,41 @@ verify-installer-alpine:
   script:
     - sh ci/verify-installer.sh alpine
 
+# ---- Release-token safety jobs — every pipeline, none receives the token ----
+
+# Fails if the release token is visible to an ordinary job. It prints only a
+# verdict, never the value. On unprotected refs the protected variable is
+# withheld anyway; on `main` and on protected tags this is the real test.
+token-isolation:
+  stage: check
+  image: $ALPINE_IMAGE
+  needs: []
+  script:
+    - |
+      if [ -n "${GITHUB_RELEASE_TOKEN:-}" ]; then
+        echo "FAIL: the release token is visible to an ordinary job" >&2
+        exit 1
+      fi
+      echo "ok: the release token is absent from this job"
+
+# Exercises ci/publish.sh, ci/auth-check.sh and ci/check-release-guard.sh with
+# a fake gh and a dummy value, and proves the pinned gh download verifies.
+release-scripts-test:
+  stage: check
+  image: $ALPINE_IMAGE
+  needs: []
+  script:
+    - env -u GITHUB_RELEASE_TOKEN sh ci/install-gh.sh
+    - sh ci/test-release-scripts.sh
+
+# Keeps this file in the approved release-token shape (see the script header).
+release-guard:
+  stage: check
+  image: $ALPINE_IMAGE
+  needs: []
+  script:
+    - sh ci/check-release-guard.sh
+
 # ---- Release jobs (§22.2) — tag pipelines only -------------------------
 
 # The tag must equal the salat crate's Cargo version exactly. Runs for
@@ -288,22 +337,31 @@ verify-version:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq
     - sh ci/verify-version.sh
 
-# Prerelease tags only: proves the publishing token works with one
-# read-only GitHub API call. Needs GITHUB_RELEASE_TOKEN (masked, protected),
-# so it can only succeed on a protected tag. Publishes nothing.
+# Prerelease protected tags only, and only by hand. Proves the publishing
+# token works with one read-only GitHub API call, so a broken credential is
+# found before a stable release. Publishes nothing. The token reaches this job
+# only after a Maintainer presses Run: it is the only job of a prerelease
+# pipeline with `environment: release`.
 auth-check:
-  stage: check
+  stage: release
   image: $ALPINE_IMAGE
   needs: []
+  resource_group: release
+  environment:
+    name: release
+    deployment_tier: production
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+-/
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+-/ && $CI_COMMIT_REF_PROTECTED == "true"
+      when: manual
+      allow_failure: true
   script:
-    - apk add --no-cache curl jq
+    - env -u GITHUB_RELEASE_TOKEN apk add --no-cache curl jq
     - sh ci/auth-check.sh
 
-# Stable vX.Y.Z tags only, protected refs only, and only by hand. A
-# prerelease tag never gets this job. Uses this pipeline's own tarball and
-# SHA256SUMS, and only after both installer jobs passed.
+# Stable vX.Y.Z protected tags only, and only by hand. A prerelease tag never
+# gets this job. It waits for EVERY validation job, then asks for confirmation,
+# and uses this pipeline's own tarball and SHA256SUMS. The token reaches this
+# job only after a Maintainer presses Run.
 publish:
   stage: release
   image: $ALPINE_IMAGE
@@ -312,15 +370,34 @@ publish:
       artifacts: true
     - job: verify-version
       artifacts: false
+    - job: check
+      artifacts: false
+    - job: msrv
+      artifacts: false
+    - job: supply-chain
+      artifacts: false
+    - job: lint-shell
+      artifacts: false
+    - job: token-isolation
+      artifacts: false
+    - job: release-scripts-test
+      artifacts: false
+    - job: release-guard
+      artifacts: false
     - job: verify-installer-debian
       artifacts: false
     - job: verify-installer-alpine
       artifacts: false
+  resource_group: release
+  environment:
+    name: release
+    deployment_tier: production
+  manual_confirmation: "Publish $CI_COMMIT_TAG to GitHub Releases? This is public."
   rules:
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $CI_COMMIT_REF_PROTECTED == "true"
       when: manual
       allow_failure: true
   interruptible: false
   script:
-    - apk add --no-cache github-cli
+    - env -u GITHUB_RELEASE_TOKEN sh ci/install-gh.sh
     - sh ci/publish.sh

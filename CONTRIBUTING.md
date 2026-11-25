@@ -177,15 +177,19 @@ The full procedure is `docs/ARCHITECTURE.md` §22.3. In short:
    are protected there, so only maintainers can create them). The tag
    pipeline adds `verify-version` (the tag must equal the Cargo version),
    runs every job above, and runs both installer tests automatically.
-5. When it is green, push the tag to GitHub, then start the manual
-   `publish` job, which creates the GitHub Release with the tarball and
-   `SHA256SUMS` and uses the changelog section as the release notes.
+   None of these jobs receives the release token.
+5. When it is green, push the tag to GitHub, then press Run on the manual
+   `publish` job and confirm. It waits for every validation job, is the
+   only job that receives the release token, and creates the GitHub
+   Release with the tarball and `SHA256SUMS`, using the changelog section
+   as the release notes.
 6. Verify the published release by running the one-line installer on a
    clean x86_64 system.
 
-A prerelease tag such as `v0.1.0-rc.1` runs the same pipeline plus
-`auth-check` (a read-only test of the release token) and never
-publishes: the `publish` job only exists for stable `vX.Y.Z` tags.
+A prerelease tag such as `v0.1.0-rc.1` runs the same pipeline and never
+publishes: the `publish` job only exists for stable `vX.Y.Z` tags. It
+also gets a manual `auth-check` job, which does nothing until you press
+Run, and then makes one read-only call to test the release token.
 
 ## The monthly AlAdhan drift check
 
