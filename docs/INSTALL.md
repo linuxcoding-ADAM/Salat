@@ -8,8 +8,8 @@ user service, and take it back off again.
 > deliverable and are not published yet. Until then, build from source:
 >
 > ```sh
-> git clone https://github.com/linuxcoding-ADAM/salat.git
-> cd salat
+> git clone https://github.com/linuxcoding-ADAM/Salat.git
+> cd Salat
 > cargo build --release
 > install -m 0755 target/release/salat ~/.local/bin/salat
 > ```
@@ -29,13 +29,13 @@ user service, and take it back off again.
 ## The one-command install (once published)
 
 ```
-curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/salat/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh | sh
 ```
 
 The two-step form, for readers who prefer to inspect first:
 
 ```
-curl -O https://raw.githubusercontent.com/linuxcoding-ADAM/salat/main/install.sh
+curl -O https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh
 less install.sh
 sh install.sh
 ```

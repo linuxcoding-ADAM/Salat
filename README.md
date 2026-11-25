@@ -111,8 +111,8 @@ Requirements:
 Build and install into `~/.local/bin`:
 
 ```sh
-git clone https://github.com/linuxcoding-ADAM/salat.git
-cd salat
+git clone https://github.com/linuxcoding-ADAM/Salat.git
+cd Salat
 cargo build --release
 install -m 0755 target/release/salat ~/.local/bin/salat
 ```

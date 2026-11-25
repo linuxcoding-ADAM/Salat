@@ -207,7 +207,7 @@ impl HttpClient {
         });
         let http = reqwest::Client::builder()
             .user_agent(format!(
-                "salat/{} (+https://github.com/linuxcoding-ADAM/salat)",
+                "salat/{} (+https://github.com/linuxcoding-ADAM/Salat)",
                 env!("CARGO_PKG_VERSION")
             ))
             .connect_timeout(connect)

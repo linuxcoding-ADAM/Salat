@@ -528,7 +528,7 @@ Also validate `school ∈ {0,1}`, `latitudeAdjustmentMethod ∈ {1,2,3}`, `midni
 
 - HTTPS only; `rustls` with certificate verification on; redirects limited to 2 and rejected if the host is not `api.aladhan.com`.
 - Timeouts: 10 s connect, 20 s total. Response body capped at 2 MiB (a legitimate monthly response is ~44 KB; the cap bounds memory against a hostile or broken response).
-- `User-Agent: salat/{version} (+https://github.com/OWNER/salat)`.
+- `User-Agent: salat/{version} (+https://github.com/OWNER/Salat)`.
 - **Retry exactly as the design promises the user:** 3 attempts with 1 s · 2 s · 4 s backoff, ±20 % jitter. Retry only on connect/timeout/`5xx`/`429`. Never retry `4xx` other than `429`.
 - Rate limit is **12 requests/second** ✅ (`ratelimit-limit: 12`, `x-ratelimit-limit-second: 12`). Salat's steady state is ~12 requests/year/config, so a single-permit `Semaphore` plus a 100 ms minimum inter-request gap is sufficient headroom.
 - Responses carry `cache-control: public,max-age=3600` and an `etag`, and `If-None-Match` correctly returns **HTTP 304** ✅. Store the ETag; use conditional revalidation on explicit refresh only. Prayer times for a past-or-present civil date do not change, so routine revalidation is pointless.
@@ -2100,7 +2100,7 @@ A checklist in `CONTRIBUTING.md`, executed per phase (§24) and before every rel
 ### 21.1 The contract
 
 ```
-curl -fsSL https://raw.githubusercontent.com/OWNER/salat/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/OWNER/Salat/main/install.sh | sh
 ```
 
 *(`OWNER` is filled in at publication time and appears in exactly three places: `install.sh`'s `REPO` variable, `README.md`, and `docs/INSTALL.md`.)*
@@ -2198,7 +2198,7 @@ The one residual trust decision is the `curl | sh` pattern itself. It is mitigat
 
 ## 22. CI/CD and release architecture (GitLab CI/CD)
 
-> **Provider.** CI/CD runs on **GitLab CI/CD** in the project `gitlab.com/linuxcoding-ADAM/salat`. **GitHub Actions is not used.** **GitHub (`github.com/linuxcoding-ADAM/salat`) remains the canonical repository**: the source of truth for code, tags, issues, the installer's raw URL (§21.1), and the Releases the installer downloads from. Only the provider changed. The jobs, gates, tarball layout, asset names and release procedure below are the ones this section always specified, expressed for GitLab. The reasons and constraints are recorded in §28.
+> **Provider.** CI/CD runs on **GitLab CI/CD** in the project `gitlab.com/linuxcoding-ADAM/salat`. **GitHub Actions is not used.** **GitHub (`github.com/linuxcoding-ADAM/Salat`) remains the canonical repository**: the source of truth for code, tags, issues, the installer's raw URL (§21.1), and the Releases the installer downloads from. Only the provider changed. The jobs, gates, tarball layout, asset names and release procedure below are the ones this section always specified, expressed for GitLab. The reasons and constraints are recorded in §28.
 
 ### 22.1 Check jobs — every push and merge request
 
@@ -2291,7 +2291,7 @@ A prerelease (`v0.1.0-rc.1`) follows steps 1–5 up to the green tag pipeline an
 ### 22.4 Developer setup
 
 ```bash
-git clone https://github.com/OWNER/salat && cd salat
+git clone https://github.com/OWNER/Salat && cd Salat
 cargo run              # quick mode
 cargo run -- --full    # full TUI
 cargo test
@@ -2777,7 +2777,7 @@ Decisions made during implementation that this document did not answer, recorded
 
 **Decision.** GitLab CI/CD is the CI/CD provider for Salat, in the project `gitlab.com/linuxcoding-ADAM/salat`. GitHub Actions is not used.
 
-**What does not change.** GitHub (`github.com/linuxcoding-ADAM/salat`) remains the canonical repository. It holds the code, tags, issues, the installer's raw URL (§21.1) and the Releases `install.sh` downloads from. This is not a migration to GitLab. The GitLab project receives the same commits only so its pipelines can run.
+**What does not change.** GitHub (`github.com/linuxcoding-ADAM/Salat`) remains the canonical repository. It holds the code, tags, issues, the installer's raw URL (§21.1) and the Releases `install.sh` downloads from. This is not a migration to GitLab. The GitLab project receives the same commits only so its pipelines can run.
 
 **Scope.** Only the CI/CD provider changed. Every phase in §23, every deliverable, every automated and manual test, the §20.5 gates, the §24 definition of done, the tarball layout and asset names of §22.2, and the installer contract of §21 stay as specified. The edits made for this decision are limited to provider-specific text: §19's directory tree, §20.5, §21.5's supply-chain row, §22, and Phase 14's scope, files, order, tests, commands and DoD.
 
@@ -2789,9 +2789,9 @@ Decisions made during implementation that this document did not answer, recorded
 
 `origin` is GitHub (canonical) and `gitlab` is GitLab (CI/CD). They stay separate remotes; `origin` never gets a second push URL. Every commit is pushed to `gitlab` first. The same commit goes to `origin` only after its pipeline is green (§22.1). GitLab pull mirroring from GitHub is not used: it is a paid GitLab feature, and pushing to `gitlab` first is what makes the pipeline a gate.
 
-### D3 — `.github/workflows/ci.yml` is retained temporarily
+### D3 — `.github/workflows/ci.yml` removed (2026-11-25)
 
-The GitHub Actions workflow stays in the repository until the equivalent GitLab pipeline has been validated and its removal has been approved. It does not run, since GitHub Actions is not used. Until it is removed, §19's tree describes the target state rather than the current one.
+The GitHub Actions workflow was kept until the equivalent GitLab pipeline had been validated. GitLab pipeline 3110581870 ran all five §22.1 jobs green on commit `b3c1a88`, and the workflow was then removed with approval. GitLab CI/CD is the only CI/CD configuration in the repository, and §19's tree describes the current state. `.github/` returns in Phase 15 with `ISSUE_TEMPLATE/`, because issues stay on GitHub.
 
 ### D4 — Prerelease tags verify, they never publish
 
@@ -2801,7 +2801,7 @@ A prerelease tag runs build, test, packaging, checksums and artifact verificatio
 
 ### D5 — The release credential
 
-The `publish` job authenticates to GitHub with a dedicated, least-privilege token. It is a fine-grained GitHub token limited to `linuxcoding-ADAM/salat` with **Contents: read and write** and no other permission. It is stored as a masked and protected GitLab CI/CD variable, so only pipelines on protected tags can read it. It is used only by `publish` and is never printed: no shell tracing in that job, and no echoing of the environment.
+The `publish` job authenticates to GitHub with a dedicated, least-privilege token. It is a fine-grained GitHub token limited to `linuxcoding-ADAM/Salat` with **Contents: read and write** and no other permission. It is stored as a masked and protected GitLab CI/CD variable, so only pipelines on protected tags can read it. It is used only by `publish` and is never printed: no shell tracing in that job, and no echoing of the environment.
 
 ### D6 — Designed for GitLab Free
 
@@ -2811,6 +2811,19 @@ The pipeline is designed for GitLab Free and does not depend on any paid or prog
 - **aarch64 runners.** Arm64 shared runners are listed for the project but had not run a job when this was written. aarch64 binaries are built with `cross` on x86_64 either way (§22.2). Only the aarch64 clean-container install test depends on arm64 runners being usable.
 - **Docker-in-Docker.** `cross` needs a Docker-in-Docker service on the shared Linux runners. This is proven by the first pipeline, not assumed.
 - **GitLab for Open Source** may raise these limits. Its eligibility is being investigated, but nothing in this design depends on it.
+
+### D7 — The canonical GitHub URL is `github.com/linuxcoding-ADAM/Salat` (2026-11-25)
+
+The GitHub repository was renamed with a capital S. The canonical URL is `https://github.com/linuxcoding-ADAM/Salat`. It is used for the `origin` remote, `salat/Cargo.toml`'s `repository`, the API User-Agent (§7.5), clone instructions, and the installer's raw URL (§21.1). GitHub redirects the old lowercase URL, but nothing in the repository relies on that redirect.
+
+What deliberately stays lowercase, and is **not** part of this rename:
+
+- the crate, the binary and every command: `salat`;
+- every runtime path: `~/.config/salat`, `~/.local/share/salat`, and the rest;
+- release asset names: `salat-<version>-<target>.tar.gz` (§22.2);
+- the GitLab CI/CD project: `gitlab.com/linuxcoding-ADAM/salat`.
+
+A clone now creates a `Salat/` directory, so clone instructions say `cd Salat`.
 
 ---
 

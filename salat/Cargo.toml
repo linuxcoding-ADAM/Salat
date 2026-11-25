@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.97.1"
 license = "MIT OR Apache-2.0"
 description = "Prayer times and Adhan for the Linux terminal"
-repository = "https://github.com/linuxcoding-ADAM/salat"
+repository = "https://github.com/linuxcoding-ADAM/Salat"
 publish = false
 
 [dependencies]

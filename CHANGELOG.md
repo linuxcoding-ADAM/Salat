@@ -24,3 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remains the canonical repository and the home of Releases. Only the
   CI/CD provider changed; the plan's phases and deliverables are unchanged
   (`docs/ARCHITECTURE.md` §22 and §28).
+- The canonical repository URL is now
+  `https://github.com/linuxcoding-ADAM/Salat` (capital S): used for the
+  crate's repository metadata, the API User-Agent, the clone instructions
+  and the installer URL. The crate, binary and runtime paths stay
+  `salat` (`docs/ARCHITECTURE.md` §28 D7).
+
+### Removed
+
+- The GitHub Actions workflow (`.github/workflows/ci.yml`), now that
+  GitLab CI/CD has run all five checks green (`docs/ARCHITECTURE.md`
+  §28 D3).
