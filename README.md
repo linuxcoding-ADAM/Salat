@@ -11,7 +11,7 @@ A keyboard-first Ratatui TUI with offline city search, notifications, and a syst
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational?logo=linux&logoColor=white)](#install)
 [![Built with Ratatui](https://img.shields.io/badge/built%20with-Ratatui-8A2BE2)](https://ratatui.rs)
 [![Prayer times: AlAdhan](https://img.shields.io/badge/prayer%20times-AlAdhan-2E8B57)](https://aladhan.com)
-[![Status: pre-release](https://img.shields.io/badge/status-pre--release-yellow)](#status-and-roadmap)
+[![Latest release](https://img.shields.io/github/v/release/linuxcoding-ADAM/Salat)](https://github.com/linuxcoding-ADAM/Salat/releases/latest)
 
 `rust` · `ratatui` · `tui` · `terminal` · `terminal-app` · `cli` · `linux` · `systemd` · `prayer-times` · `adhan` · `aladhan` · `islam` · `salat`
 
@@ -85,8 +85,14 @@ palette, no mouse required, and nothing running that you did not ask for.
 
 ## Quick start
 
-Salat is pre-release. For now, build it from source (see
-[Install](#install)), then run:
+Install the latest release on Linux x86_64 with one command (details in
+[Install](#install)):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh | sh
+```
+
+Then run:
 
 ```sh
 salat                 # quick live view
@@ -101,25 +107,34 @@ directly, then check the result with `salat config`.
 
 Requirements:
 
-- Linux on `x86_64` (64-bit Intel/AMD PCs); ARM (`aarch64`) is not supported yet
-- A current stable Rust toolchain. The pinned version in
-  `rust-toolchain.toml` is installed automatically by `rustup`.
+- Linux on `x86_64` (64-bit Intel/AMD PCs). ARM (`aarch64`) is not
+  supported yet, and Windows and macOS are not supported.
+- `curl` or `wget`, `tar`, and `sha256sum` or `shasum` (present on almost
+  every distribution)
 - Optional: an audio player for Adhan (see [Adhan audio](#adhan-audio))
 - Optional: a D-Bus session bus for desktop notifications (present on any
   desktop session)
 
-Build and install into `~/.local/bin`:
+Install the latest release into `~/.local/bin`:
 
 ```sh
-git clone https://github.com/linuxcoding-ADAM/Salat.git
-cd Salat
-cargo build --release
-install -m 0755 target/release/salat ~/.local/bin/salat
+curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh | sh
 ```
 
-Make sure `~/.local/bin` is on your `PATH`. A one-command installer with
-checksum verification and static release binaries is planned for the first
-release; see [`docs/INSTALL.md`](docs/INSTALL.md).
+The installer downloads the static release binary from GitHub Releases,
+verifies its SHA-256 against the published `SHA256SUMS` before unpacking
+anything, and never uses `sudo`. If `~/.local/bin` is not on your `PATH`,
+it prints the line to add. To read the script before running it, download
+it first:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh
+less install.sh
+sh install.sh
+```
+
+Upgrading, uninstalling and building from source are covered in
+[`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Commands
 
@@ -293,7 +308,7 @@ user units start at boot. The full guide, including removal, is in
   the binary.
 - **Audio through a player.** The Adhan is played by an external player
   process. ALSA and PipeWire are not linked into Salat, which is why the
-  release build is planned as a fully static musl binary.
+  release build can be a fully static musl binary.
 
 The complete design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 which is the source of truth for implementation decisions.
@@ -348,9 +363,7 @@ check and contribution conventions are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Status and roadmap
 
-Salat is under active development, phase by phase, following
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The main branch currently
-includes:
+Version 0.1.0 is the first release. It includes:
 
 - prayer times from AlAdhan with the monthly cache and offline operation
 - the quick view and the full TUI, at 80×24 and larger
@@ -358,10 +371,11 @@ includes:
 - notifications, the Adhan, and the mosque reminder
 - the system status screen and command
 - the headless daemon, with the `--once` catch-up and the systemd unit
+- the one-command installer and a static x86_64 release binary
 
-Still to come: packaging (the one-command installer and static release
-binaries), the CI release workflow, and contributor documentation. Changes
-are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+Planned for later releases: ARM (`aarch64`) Linux builds. Development
+follows [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and changes are
+recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 

@@ -3,50 +3,92 @@
 How to get Salat onto a Linux machine, keep it updated, run it as a
 user service, and take it back off again.
 
-> **Pre-release note.** The `install.sh` one-command installer and the
-> static musl release binaries it fetches are the packaging phase's
-> deliverable and are not published yet. Until then, build from source:
->
-> ```sh
-> git clone https://github.com/linuxcoding-ADAM/Salat.git
-> cd Salat
-> cargo build --release
-> install -m 0755 target/release/salat ~/.local/bin/salat
-> ```
->
-> Everything below that mentions the installer (`install.sh`) describes
-> that future script; the **systemd** section is fully usable today.
-
 ## Requirements
 
 - Linux on `x86_64` (64-bit Intel/AMD PCs). ARM (`aarch64`) is not
-  supported yet; the installer says so and stops.
+  supported yet; the installer says so and stops. Windows and macOS are
+  not supported.
 - A tokio-capable kernel — in practice, any Linux from the last decade.
-- Optional: an audio player for Adhan (one of `mpv`, `ffplay`,
-  `cvlc`, `aplay` on `$PATH`).
+- For the installer: `curl` or `wget`, `tar`, and `sha256sum` or
+  `shasum`. The installer refuses to continue without a checksum tool.
+- Optional: an audio player for Adhan (one of `mpv`, `paplay`,
+  `ffplay`, `aplay` on `$PATH`).
 - Optional: a D-Bus session bus for desktop notifications (present on
   any desktop session).
 
-## The one-command install (once published)
+## The one-command install
 
-```
+```sh
 curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh | sh
 ```
 
 The two-step form, for readers who prefer to inspect first:
 
-```
-curl -O https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh
+```sh
+curl -fsSLO https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh
 less install.sh
 sh install.sh
 ```
 
-The script downloads the release tarball, verifies its SHA-256 against
-the published `SHA256SUMS` **before** extraction, installs one
-statically-linked binary to `~/.local/bin/salat`, and prints the
-`export PATH=...` line for your shell if `~/.local/bin` is not already
-on it. It never runs as root, never writes outside your home, and
-never edits a shell rc file.
+The script finds the latest release on GitHub Releases, downloads its
+tarball (`salat-<version>-x86_64-unknown-linux-musl.tar.gz`) and
+`SHA256SUMS`, and verifies the tarball's SHA-256 **before** extraction.
+It checks every archive member before unpacking, runs the new binary's
+`--version` as a smoke test, and only then installs the one
+statically-linked binary to `~/.local/bin/salat`. If `~/.local/bin` is
+not already on your `PATH`, it prints the `export PATH=...` line for
+your shell. It never runs as root, never uses `sudo`, never writes
+outside the install directory and your temporary directory, and never
+edits a shell rc file.
+
+It prints the tarball's download URL and its verified SHA-256 as it
+runs.
+
+### Installer options
+
+| Option | Effect |
+|---|---|
+| `--prefix DIR` | Install into `DIR` instead of `~/.local/bin` (or set `SALAT_INSTALL_DIR`). |
+| `--version vX.Y.Z` | Install that release instead of the latest one. |
+| `--force` | Reinstall even if that version is already installed. |
+| `--uninstall` | Remove the binary and list your data (see [Uninstall](#uninstall)). |
+| `--purge` | With `--uninstall`: also delete that data, after you confirm. |
+| `--help` | Show the usage text. |
+
+To pass options through the one-line form, use `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh | sh -s -- --version v0.1.0
+```
+
+### Verifying a download by hand
+
+Each release on
+[GitHub Releases](https://github.com/linuxcoding-ADAM/Salat/releases)
+carries the tarball and `SHA256SUMS`. To install without the script,
+download both into one directory, then:
+
+```sh
+sha256sum -c SHA256SUMS
+tar -xzf salat-0.1.0-x86_64-unknown-linux-musl.tar.gz
+install -m 0755 salat-0.1.0-x86_64-unknown-linux-musl/salat ~/.local/bin/salat
+```
+
+The tarball also contains `README.md`, `LICENSE`, `CHANGELOG.md` and
+`salat.service`.
+
+## Building from source
+
+To build Salat yourself instead (still Linux x86_64), you need a Rust
+toolchain; the version pinned in `rust-toolchain.toml` is installed
+automatically by `rustup`:
+
+```sh
+git clone https://github.com/linuxcoding-ADAM/Salat.git
+cd Salat
+cargo build --release
+install -m 0755 target/release/salat ~/.local/bin/salat
+```
 
 ## Upgrades
 
@@ -64,6 +106,11 @@ data it found without deleting anything — `~/.config/salat/`,
 unit — printing the exact `rm -rf` command for each. Deleting your
 configuration is your decision, not the installer's.
 
+`sh install.sh --uninstall --purge` also deletes that data, but only
+after you type `yes` at a terminal. Because it needs a terminal, run a
+downloaded copy of the script rather than piping it into `sh`; a purge
+without a terminal is refused and deletes nothing.
+
 ## Running Salat as a user service (systemd)
 
 Salat is fully functional as a foreground terminal program — that is
@@ -74,8 +121,8 @@ unit file is the supported way to keep it alive.
 
 ### 1. Install the binary
 
-The unit expects `~/.local/bin/salat` (see the build-from-source
-snippet above, or the installer's default prefix).
+The unit expects `~/.local/bin/salat`, the installer's default
+location (or build from source and install it there, as above).
 
 ### 2. Install the unit
 

@@ -7,35 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-25
+
+The first release: prayer times and the Adhan for the Linux terminal, as a
+single static binary for x86_64 Linux.
+
 ### Added
 
-- Phase 0 — Foundation and CLI skeleton (§23 of `docs/ARCHITECTURE.md`):
-  the cargo workspace (`salat` + `xtask`), pinned toolchain, lint and
-  supply-chain configuration, the full `src/` module tree as documented
-  stubs, `SalatError` with the final error-code table, `Cli` parsing and
-  dispatch with the five exit codes, file logging to
-  `$XDG_STATE_HOME/salat/salat.log`, and CI. Every command responds with
-  an explicit not-implemented error rather than a panic; the services
-  themselves arrive phase by phase.
+- **Quick view.** Bare `salat` prints a compact live view inside the shell
+  (today's five times, the next prayer and a countdown) without clearing
+  the scrollback. `salat --once` prints one frame and exits, as plain text
+  with no escape codes when piped.
+- **Full TUI.** `salat --full` opens the interactive interface: the Today
+  dashboard (next prayer, countdown, today's times, Hijri date, Qibla
+  direction, service health), Settings, per-prayer configuration,
+  Notification settings, Location, Status, and the `?` states reference.
+  It adapts from 80×24 up to larger terminals, honours `NO_COLOR`, and
+  shows a too-small guard below the minimum size.
+- **Prayer times from the AlAdhan API.** One request per month in ISO-8601
+  mode, with a choice of calculation method, Shafi or Hanafi school,
+  latitude-adjustment and midnight modes, and per-prayer tuning from -60
+  to +60 minutes. There is no local calculation engine.
+- **Offline cache.** A SQLite database (compiled into the binary) keeps the
+  prayer-day cache, the event log, the fired-event ledger and completed
+  prayers, so cached days work without a network connection.
+- **Configuration.** A commented TOML file at
+  `~/.config/salat/config.toml`, created with defaults on first run,
+  validated with line numbers for unknown keys, and written atomically.
+  `salat config` prints the resolved paths and effective configuration;
+  `salat config --edit` opens it in `$EDITOR` and validates the result.
+- **Offline city search.** An embedded GeoNames index (cities of 15,000
+  people or more, plus a short curated list of verified places), searchable
+  by name, by coordinates, or by auto-detection from the system timezone.
+- **Scheduler.** Compares absolute wall-clock times on a one-second tick,
+  detects clock jumps, records every fired event so a restart never fires
+  it twice, and catches up missed events that are still inside their grace
+  window.
+- **Notifications.** Per-prayer reminder windows before and after each
+  prayer, desktop notifications through the freedesktop notification
+  service, and an optional mosque reminder.
+- **Adhan playback.** Plays a user-supplied MP3 through the first available
+  player among `mpv`, `paplay`, `ffplay` and `aplay`, started without a
+  shell, with full-screen and inline alert overlays, snooze, and a stop that
+  always ends the player. `salat test-adhan` checks the setup. No
+  recitation audio is shipped.
+- **System status.** The Status screen and `salat status` report ten
+  components as healthy, degraded, down or unknown, never a false "OK".
+  `salat status` exits 0 when healthy and 1 when something is down.
+- **Headless daemon.** `salat daemon` runs the scheduler without a terminal,
+  reloads its configuration on `SIGHUP`, and shuts down within two seconds
+  on `SIGTERM`. `salat daemon --once` runs one catch-up pass for cron-style
+  use. Only one process owns the schedule at a time: a second scheduler
+  exits with `E903`, and a TUI started beside the daemon only observes.
+- **systemd user unit.** `packaging/systemd/salat.service`, sandboxed
+  (`NoNewPrivileges`, read-only filesystem apart from Salat's own
+  directories, `PrivateTmp`, `MemoryMax=128M`), with restart on failure but
+  not after a configuration error.
+- **One-command installer.** `install.sh` downloads the release tarball,
+  verifies its SHA-256 against `SHA256SUMS` before unpacking, validates
+  every archive member before extracting, smoke-tests the binary, and
+  installs it to `~/.local/bin` without `sudo`. It also upgrades, and
+  uninstalls with `--uninstall` (listing your data rather than deleting it,
+  unless you confirm `--purge`).
+- **Release binaries.** A statically linked, stripped musl binary for
+  `x86_64-unknown-linux-musl`, packaged as
+  `salat-0.1.0-x86_64-unknown-linux-musl.tar.gz` with `SHA256SUMS`.
+- **CI.** GitLab CI/CD runs formatting, clippy, the test suite, the MSRV
+  check, the supply-chain audit, shell lint, the musl release build,
+  packaging, and the installer tests on Debian and Alpine. Releases are
+  published to GitHub Releases by a manual job for stable tags only.
 
-### Changed
+### Known limitations
 
-- CI/CD moves to GitLab CI/CD; GitHub Actions is no longer used. GitHub
-  remains the canonical repository and the home of Releases. Only the
-  CI/CD provider changed; the plan's phases and deliverables are unchanged
-  (`docs/ARCHITECTURE.md` §22 and §28).
-- The canonical repository URL is now
-  `https://github.com/linuxcoding-ADAM/Salat` (capital S): used for the
-  crate's repository metadata, the API User-Agent, the clone instructions
-  and the installer URL. The crate, binary and runtime paths stay
-  `salat` (`docs/ARCHITECTURE.md` §28 D7).
-- v0.1.0 targets x86_64 Linux PCs (64-bit Intel/AMD). ARM (`aarch64`)
-  is deferred to a later release, and the installer will say so rather
-  than fail on a missing download (`docs/ARCHITECTURE.md` §28 D8).
-- Release binaries are built stripped (`[profile.release] strip = true`).
+- Linux on x86_64 (64-bit Intel/AMD) only. ARM (`aarch64`) is deferred to
+  a later release; the installer says so and stops. Windows and macOS are
+  not supported.
+- Adhan audio is not included: place your own MP3 at
+  `~/.local/share/salat/adhan/<preset>.mp3`.
 
-### Removed
-
-- The GitHub Actions workflow (`.github/workflows/ci.yml`), now that
-  GitLab CI/CD has run all five checks green (`docs/ARCHITECTURE.md`
-  §28 D3).
+[Unreleased]: https://github.com/linuxcoding-ADAM/Salat/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/linuxcoding-ADAM/Salat/releases/tag/v0.1.0
