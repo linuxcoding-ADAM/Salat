@@ -1,14 +1,17 @@
 # Contributing to Salat
 
 Thank you for helping. This guide covers setting up, the checks a change
-must pass, snapshot review, conventions, how CI gates changes, and how a
-release is made. The design itself — every module, decision and phase —
+must pass, snapshot review, conventions, how a pull request is reviewed and
+merged, how CI gates changes, and how a release is made. The design itself — every module, decision and phase —
 is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), which is the source
 of truth for implementation decisions.
 
 Issues and pull requests go to the canonical repository,
 <https://github.com/linuxcoding-ADAM/Salat>. Salat supports Linux on
 `x86_64` only, so develop and test there.
+
+Maintainers: the procedure for verifying and merging a pull request is in
+[`docs/MAINTAINING.md`](docs/MAINTAINING.md).
 
 ## Setup
 
@@ -102,10 +105,48 @@ The installation and systemd checks are described in
   recorded, with their evidence, in
   [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
 
-## CI and the merge gate
+## Sending a pull request
+
+1. Fork the repository (or push a branch, if you have write access) and
+   open a pull request against `main` on GitHub.
+2. Fill in the pull request template, and run the checks above locally.
+3. Keep the pull request focused: one change, with its tests, its
+   documentation and a `CHANGELOG.md` line under `[Unreleased]`.
+
+### How a pull request is verified and merged
+
+Salat's automated checks run on **GitLab CI/CD only**; GitHub Actions is
+not used. This has consequences you will notice:
+
+- **No checks appear on your pull request.** GitLab results are not shown
+  as GitHub status checks, and you cannot start the pipeline yourself.
+- **The maintainer runs the project's CI for you.** They copy your exact
+  commits to a branch on GitLab, wait for the pipeline, and post the result
+  (with a link) as a comment on your pull request. The GitLab project and
+  its pipelines are public.
+- **The result applies to one exact commit.** If you push new commits, or
+  force-push, the earlier result no longer counts and the commits are
+  verified again. If `main` has moved on, you may be asked to update your
+  branch, which also means a new verification.
+- **Your commits are kept as they are.** Only commits that passed the
+  pipeline are added to `main`, and their commit IDs are not changed:
+  GitHub's squash and rebase merges are disabled, and the maintainer does
+  not use GitHub's merge button at all. They fast-forward `main` to your
+  commits, or, when `main` has moved, add one merge commit that is itself
+  verified. GitHub marks the pull request as merged once your commits are
+  in `main`; if it does not, the maintainer closes it with a link to the
+  commit.
+- **Expect it to take a while.** One full pipeline is about 21 minutes of
+  GitLab job time, and the maintainer verifies pull requests as time
+  allows.
+
+Run the three checks locally first, so the pipeline has nothing to find.
+
+## CI
 
 CI runs on GitLab CI/CD (`.gitlab-ci.yml`); GitHub stays the canonical
-repository and the home of Releases (`docs/ARCHITECTURE.md` §22, §28).
+repository and the home of issues, pull requests and Releases
+(`docs/ARCHITECTURE.md` §22, §28).
 
 | Stage | Jobs |
 |---|---|
@@ -114,9 +155,14 @@ repository and the home of Releases (`docs/ARCHITECTURE.md` §22, §28).
 | package | `package` — verifies that binary and builds the release tarball and `SHA256SUMS` |
 | verify | `verify-installer-debian`, `verify-installer-alpine` — the installer tests against those artifacts (manual on branches, automatic on tags) |
 
-GitLab cannot gate GitHub branches, so the gate is a procedure: a
-commit is pushed to GitLab first, and only when its pipeline is green is
-the same commit pushed to GitHub.
+GitLab cannot gate GitHub branches, so the gate is a procedure, not a
+setting: only commits whose pipeline passed are pushed to GitHub `main`,
+and they are pushed unchanged. For the maintainers' own commits that
+means pushing to GitLab first; for pull requests, see
+[`docs/MAINTAINING.md`](docs/MAINTAINING.md).
+
+On GitHub, `main` cannot be force-pushed or deleted, and `v*` release
+tags cannot be moved or deleted. Those rules do not run any checks.
 
 ## Releases
 
