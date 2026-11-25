@@ -10,7 +10,7 @@ expression: lines
                                                                                 
               ╭─ INITIALIZING ───────────────────────────────────╮              
               │                      SALAT                       │              
-              │       v0.1.0 · Rust · Ratatui · Crossterm        │              
+              │     v0.1.0-rc.1 · Rust · Ratatui · Crossterm     │              
               │                                                  │              
               │ ✓  Configuration                                 │              
               │ ✓  Location                                      │              
