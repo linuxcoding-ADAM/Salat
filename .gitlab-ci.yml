@@ -1,10 +1,24 @@
-# GitLab CI/CD — the check jobs of docs/ARCHITECTURE.md §22.1.
+# GitLab CI/CD for Salat — docs/ARCHITECTURE.md §22.
 #
 # GitLab CI/CD is Salat's CI/CD provider; GitHub stays the canonical
-# repository (§28 D1). These are the same five checks the plan has always
-# required (§20.5): fmt, clippy, tests, the musl release build, shellcheck,
-# cargo-deny, and the MSRV check. The release jobs of §22.2 arrive in
-# Phase 14 and are deliberately absent here.
+# repository (§28 D1). GitLab does ALL compilation, testing, binary
+# verification and installer testing; nothing is built on a developer PC.
+#
+#   check    (parallel)  check · msrv · supply-chain · lint-shell — the
+#                        five §20.5 checks, with build-musl below
+#   build    build-musl  the one and only release compile (cross, x86_64,
+#                        stripped) → artifact dist/salat
+#   package  package     verifies THAT binary (arch, static, stripped,
+#                        version, smoke tests), assembles the §22.2 tarball
+#                        and SHA256SUMS → artifacts dist/
+#   verify   verify-installer-debian / -alpine (parallel), on THOSE
+#            artifacts; manual on branches and MRs, automatic on tags;
+#            created only once install.sh exists
+#
+# Artifacts flow strictly build-musl → package → verify-installer-* via
+# `needs`; nothing downstream recompiles. aarch64 is deferred (§28 D8). The
+# release-publishing jobs of §22.2 (verify-version, auth-check, publish) are
+# added in a later Phase 14 step.
 #
 # Free-tier notes (§28 D6): jobs run on GitLab's default shared runner
 # (saas-linux-small-amd64); cargo-deny, cross and the Docker CLI are
@@ -26,6 +40,9 @@ workflow:
 
 stages:
   - check
+  - build
+  - package
+  - verify
 
 variables:
   # Keep cargo's home inside the project directory so GitLab can cache it.
@@ -36,6 +53,9 @@ variables:
   CARGO_INCREMENTAL: "0"
   DEBIAN_FRONTEND: noninteractive
   RUST_IMAGE: rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c
+  # debian:oldstable is bookworm; the dated tag names the exact build.
+  DEBIAN_IMAGE: debian:oldstable-20261123-slim@sha256:9edc463cb71d29a0ca408fa1959c4123379438970d62f4760fa19da805b14933
+  ALPINE_IMAGE: alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 default:
   # With the project's auto-cancel setting (enabled), a newer pipeline on
@@ -86,7 +106,9 @@ check:
 
 build-musl:
   extends: .rust
-  stage: check
+  stage: build
+  # Starts at once, in parallel with the check stage.
+  needs: []
   services:
     - name: docker:29-dind@sha256:4bbc7223f81db790097c6dea42fb93e05b8fead4f0431fbe6ccaba6e8473201c
       alias: docker
@@ -103,6 +125,9 @@ build-musl:
     DOCKER_SHA256: 7c1ebadc65c716cdc6d35fc78759ed0e4317debf43c21dd12f066f2006999def
     CROSS_VERSION: v0.2.5
     CROSS_SHA256: a486cefa6cb486971b97be321ea9dfc2e90c1979550295314a368f53fab6d588
+    # Throwaway container that reads the built binary out of cross's
+    # Docker volume (ci/extract-cross-binary.sh). Pulled by the dind daemon.
+    HELPER_IMAGE: $ALPINE_IMAGE
   # With CROSS_REMOTE the target directory lives in a Docker volume, so
   # only the cargo registry is worth caching here.
   cache:
@@ -129,17 +154,31 @@ build-musl:
     - mkdir -p "$CARGO_HOME/bin" && ln -sf "$(dirname "$(command -v rustup)")"/* "$CARGO_HOME/bin/"
     - docker version
     - cross --version
+    # Never reuse stale output: nothing from an earlier build may be found.
+    - rm -rf target/x86_64-unknown-linux-musl dist
+    - export BUILD_START="$(date +%s)"
     - cross build --release --target x86_64-unknown-linux-musl
+    - sh ci/extract-cross-binary.sh
+  artifacts:
+    name: "salat-binary-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - dist/salat
+      - dist/reports/build-provenance.txt
+    expire_in: 1 week
 
 lint-shell:
   stage: check
   image: koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002
   script:
-    # install.sh ships in Phase 14; until it exists there is nothing to
-    # lint, so the job documents the skip instead of failing.
+    # The CI scripts are always linted.
+    - shellcheck ci/*.sh
+    # install.sh arrives in the next Phase 14 step. Until then there is
+    # nothing to lint and the job says so; the commit that adds install.sh
+    # removes this skip, so from then on a missing installer or any
+    # shellcheck finding fails the job.
     - |
       if [ ! -f install.sh ]; then
-        echo "install.sh not present yet (Phase 14); skipping shellcheck"
+        echo "install.sh not present yet (Phase 14); skipping its shellcheck"
         exit 0
       fi
       shellcheck install.sh
@@ -179,3 +218,59 @@ msrv:
     # rust-toolchain.toml pins the channel; rust-version in salat/Cargo.toml
     # is asserted by the build itself.
     - cargo check --workspace --all-targets
+
+# Verifies the binary build-musl produced (passed as an artifact, never
+# rebuilt) and assembles the release tarball + SHA256SUMS (§22.2).
+# Lightweight: about a minute, so it runs on every pipeline.
+package:
+  stage: package
+  image: $DEBIAN_IMAGE
+  needs:
+    - job: build-musl
+      artifacts: true
+  script:
+    # file and readelf (binutils) for the architecture/static/strip checks.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends file binutils
+    - sh ci/package.sh
+  artifacts:
+    name: "salat-package-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - dist/*.tar.gz
+      - dist/SHA256SUMS
+      - dist/reports/
+    expire_in: 1 week
+
+# Installer tests on the EXACT package artifacts, one clean image each,
+# running in parallel. The job only exists once install.sh does. Automatic
+# (and required) on tags; on branches and MRs they are started by hand, and
+# a not-yet-run manual job never counts as passed.
+.verify-installer:
+  stage: verify
+  needs:
+    - job: package
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG
+      exists: [install.sh]
+      when: on_success
+    - exists: [install.sh]
+      when: manual
+      allow_failure: true
+  artifacts:
+    name: "salat-verify-$CI_JOB_NAME-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - verify-logs/
+    when: always
+    expire_in: 1 week
+
+verify-installer-debian:
+  extends: .verify-installer
+  image: $DEBIAN_IMAGE
+  script:
+    - sh ci/verify-installer.sh debian
+
+verify-installer-alpine:
+  extends: .verify-installer
+  image: $ALPINE_IMAGE
+  script:
+    - sh ci/verify-installer.sh alpine
