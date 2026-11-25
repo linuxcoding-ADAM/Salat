@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `docs/TROUBLESHOOTING.md`: diagnostics, platform support, installer
+  messages, terminal size and layout, every error code, the daemon and
+  systemd, and exit codes.
+- A full contributor guide in `CONTRIBUTING.md`: setup, the checks CI
+  runs, snapshot review, conventions, the merge gate and the release
+  procedure.
+
+### Fixed
+
+- Documentation: the valid calculation method ids are `0`–`5`, `7`–`23`
+  and `99` (`docs/CONFIGURATION.md` listed `0`–`15`, `17`–`23`, `99`).
+- Documentation: the README lists all five exit codes, including `2`
+  (usage) and `4` (prayer data or API failure).
+- Documentation: the systemd setup no longer needs a clone of the
+  repository, and no longer claims the unit skips restarting after a
+  configuration error.
+- Documentation: the v0.1.0 systemd unit cannot write the scheduler lock
+  (`E904 … Read-only file system`); `docs/KNOWN_ISSUES.md` records the
+  evidence and `docs/INSTALL.md` documents a `ReadWritePaths=%t` drop-in
+  as a temporary workaround.
+
 ## [0.1.0] - 2026-11-25
 
 The first release: prayer times and the Adhan for the Linux terminal, as a

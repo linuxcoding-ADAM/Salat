@@ -183,9 +183,12 @@ with silently wrong times.
 | `midnight_mode` | integer | `0` | `0` (Standard) \| `1` (Jafari) |
 | `shafaq` | string | `"general"` | `general` \| `red` \| `white` — only used when `method = 15` |
 
-Valid method ids (the set AlAdhan itself documents; anything else makes
-the API return silently wrong times, so it is rejected before any
-request): `0`–`15`, `17`–`23`, `99`.
+Valid method ids: `0`–`5`, `7`–`23`, `99` — the set verified against
+AlAdhan's own `/v1/methods` list. Anything else is rejected before any
+request, because the API answers an unknown id with silently wrong
+times rather than an error. `6` is excluded on purpose: AlAdhan accepts
+it but answers as ISNA (`2`), so a configuration saying `6` would not
+mean what it says.
 
 ### `[calculation.tune]`
 
@@ -280,8 +283,11 @@ salat: error[E201]: configuration invalid
   directory, fsyncs, then renames over the target. A crash mid-write can
   never truncate a working configuration, and a failed write never
   leaves a `.tmp` behind or touches the old file.
-- A running instance picks up changes through its watch channel — no
-  restart, no polling. A `SIGHUP` re-reads the file.
+- Changes saved from the interface reach the running instance
+  immediately, with no restart. Salat does **not** watch the file, so a
+  hand edit (including `salat config --edit`) is picked up by a running
+  TUI or daemon only when it receives `SIGHUP` (for the systemd unit:
+  `systemctl --user kill -s HUP salat`) or when it restarts.
 - The file is written at mode `0600`: it records a physical location,
   which is personal data even though it is not a secret.
 

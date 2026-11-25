@@ -528,7 +528,7 @@ Also validate `school ∈ {0,1}`, `latitudeAdjustmentMethod ∈ {1,2,3}`, `midni
 
 - HTTPS only; `rustls` with certificate verification on; redirects limited to 2 and rejected if the host is not `api.aladhan.com`.
 - Timeouts: 10 s connect, 20 s total. Response body capped at 2 MiB (a legitimate monthly response is ~44 KB; the cap bounds memory against a hostile or broken response).
-- `User-Agent: salat/{version} (+https://github.com/OWNER/Salat)`.
+- `User-Agent: salat/{version} (+https://github.com/linuxcoding-ADAM/Salat)`.
 - **Retry exactly as the design promises the user:** 3 attempts with 1 s · 2 s · 4 s backoff, ±20 % jitter. Retry only on connect/timeout/`5xx`/`429`. Never retry `4xx` other than `429`.
 - Rate limit is **12 requests/second** ✅ (`ratelimit-limit: 12`, `x-ratelimit-limit-second: 12`). Salat's steady state is ~12 requests/year/config, so a single-permit `Semaphore` plus a 100 ms minimum inter-request gap is sufficient headroom.
 - Responses carry `cache-control: public,max-age=3600` and an `etag`, and `If-None-Match` correctly returns **HTTP 304** ✅. Store the ETag; use conditional revalidation on explicit refresh only. Prayer times for a past-or-present civil date do not change, so routine revalidation is pointless.
@@ -2100,10 +2100,10 @@ A checklist in `CONTRIBUTING.md`, executed per phase (§24) and before every rel
 ### 21.1 The contract
 
 ```
-curl -fsSL https://raw.githubusercontent.com/OWNER/Salat/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/main/install.sh | sh
 ```
 
-*(`OWNER` is filled in at publication time and appears in exactly three places: `install.sh`'s `REPO` variable, `README.md`, and `docs/INSTALL.md`.)*
+*(The repository owner, `linuxcoding-ADAM`, appears in `install.sh`'s `REPO` variable, `README.md`, and `docs/INSTALL.md`; §28 D7 lists every place the canonical URL is used.)*
 
 End state: `salat` is an executable on the user's `PATH`. No Rust, no Cargo, no clone, no compiler, no `sudo`. One HTTP round trip for the script, one for the release metadata, two for the assets.
 
@@ -2177,6 +2177,8 @@ WantedBy=default.target
 
 A **user** unit (`systemctl --user`), not a system unit — it needs the session D-Bus for notifications and the session audio device, both of which a system unit cannot reach without invasive configuration. `ProtectHome=read-only` plus three explicit `ReadWritePaths` is the whole filesystem surface Salat needs. Enabling it is two documented commands; Salat is fully functional without it, because the foreground TUI runs the same scheduler (§4.3).
 
+**Known issue in v0.1.0 (verified 2026-11-25, unresolved).** The three `ReadWritePaths` are not the whole surface: the §4.3 scheduler lock lives in `$XDG_RUNTIME_DIR/salat/` (`/run/user/<uid>`), which `ProtectSystem=strict` makes read-only. Under the unit's sandbox, `salat daemon` fails with `E904 … Read-only file system (os error 30)` and exits 1, and `Restart=on-failure` restarts it every 10 s. The same sandbox with the runtime directory added to `ReadWritePaths` runs normally. `Restart=on-failure` also restarts after a configuration error (exit 3). Both need a unit change, which has not been made: v0.1.0 stays as published (see `docs/KNOWN_ISSUES.md`, which records the evidence and the proposed fixes as not implemented). Meanwhile `docs/INSTALL.md` and `docs/TROUBLESHOOTING.md` give users a `ReadWritePaths=%t` drop-in.
+
 ### 21.5 Security posture
 
 | Surface | Control |
@@ -2215,12 +2217,16 @@ default:
 # jobs
 #   check:         fmt --check · clippy --all-targets --all-features -D warnings · cargo test --all-features
 #   build-musl:    cargo build --release --target x86_64-unknown-linux-musl (via cross, Docker-in-Docker service)
-#   lint-shell:    shellcheck install.sh
+#   lint-shell:    shellcheck install.sh ci/*.sh
 #   supply-chain:  cargo deny check advisories bans licenses sources
 #   msrv:          cargo check with the rust-toolchain.toml pinned version
+# then, on the build-musl artifact (nothing downstream recompiles):
+#   package:                  verify the binary, build the tarball and SHA256SUMS
+#   verify-installer-debian,
+#   verify-installer-alpine:  the installer tests (manual on branches, automatic on tags)
 ```
 
-GitLab's `cache:` (keyed on `Cargo.lock`, holding the cargo home and `target/`) replaces `Swatinem/rust-cache`. All five jobs must pass.
+GitLab's `cache:` (keyed on `Cargo.lock`) replaces `Swatinem/rust-cache`. As implemented it holds only the cargo registry and git downloads, not `target/`: after the `check` job `target/` measured 4.9 GB, which costs more to archive and restore on shared runners than recompiling saves. All five check jobs must pass.
 
 **The merge gate.** GitLab cannot enforce required checks on GitHub branches, so the gate is a fixed procedure rather than a branch-protection setting. Every commit is pushed to the `gitlab` remote first. Only when its pipeline is green is the **same commit** pushed to `origin` (GitHub). The two remotes stay separate: `origin` is GitHub, `gitlab` is GitLab, and `origin` never carries a second push URL (§28 D2).
 
@@ -2234,18 +2240,21 @@ Tag pipelines run for two tag forms, both validated against `Cargo.toml`:
 | SemVer prerelease `vMAJOR.MINOR.PATCH-PRE` | `v0.1.0-rc.1` | every job below except `publish` | **never**: the job is not created for prerelease tags |
 
 ```yaml
-# jobs (tag pipelines only)
-#   verify:            assert Cargo.toml version == tag (fail fast, before building anything)
-#   check jobs:        the five §22.1 jobs, re-run
-#   build:             x86_64-unknown-linux-musl (aarch64 deferred — §28 D8)
-#   checksums:         aggregate SHA256SUMS
-#   verify-artifacts:  the installer tests of Phase 14 against this pipeline's own artifacts
-#   publish:           manual, stable tags only: create the GitHub Release
+# jobs in tag pipelines (names as implemented in .gitlab-ci.yml)
+#   verify-version:   assert Cargo.toml version == tag (fail fast; build-musl waits for it)
+#   auth-check:       prerelease tags only: a read-only check that the release token works
+#   check jobs:       the five §22.1 jobs, re-run
+#   build-musl:       x86_64-unknown-linux-musl (aarch64 deferred — §28 D8)
+#   package:          verify the binary, build the tarball and SHA256SUMS
+#   verify-installer-debian / -alpine:  the installer tests of Phase 14 against this pipeline's own artifacts
+#   publish:          manual, stable protected tags only: create the GitHub Release
 ```
 
-**`verify`** exists because the single most common release mistake is a tag that disagrees with `Cargo.toml`, producing a `v0.2.0` release whose binary reports `0.1.0`. It reads the version with `cargo metadata` and requires `${CI_COMMIT_TAG#v}` to equal it **exactly**. It accepts any version Cargo accepts, including a SemVer prerelease suffix, so `v0.1.0-rc.1` passes only when `Cargo.toml` says `0.1.0-rc.1`. It fails in ten seconds rather than after the cross-compile.
+The original plan named these jobs `verify`, `build`, `checksums` and `verify-artifacts`; §28 D4 still uses the name `verify`.
 
-**`build`** (per target): install the toolchain, build with `cross` (musl cross-linking without hand-managed sysroots), `strip`, assemble a staging directory, and produce:
+**`verify-version`** exists because the single most common release mistake is a tag that disagrees with `Cargo.toml`, producing a `v0.2.0` release whose binary reports `0.1.0`. It reads the version with `cargo metadata` and requires `${CI_COMMIT_TAG#v}` to equal it **exactly**. It accepts any version Cargo accepts, including a SemVer prerelease suffix, so `v0.1.0-rc.1` passes only when `Cargo.toml` says `0.1.0-rc.1`. It fails in ten seconds rather than after the cross-compile.
+
+**`build-musl`** builds the release binary with `cross` (musl cross-linking without hand-managed sysroots), stripped by `[profile.release] strip = true`. `package` (below) then assembles:
 
 ```
 salat-<version>-<target>.tar.gz
@@ -2257,11 +2266,13 @@ salat-<version>-<target>.tar.gz
         └── salat.service
 ```
 
-The tarball has one top-level directory (no tarbombs), and `install.sh` reads `*/salat` from it. Each job emits its own `.sha256` as a job artifact.
+The tarball has one top-level directory (no tarbombs), and `install.sh` reads `*/salat` from it.
 
-**`checksums`**: collect the build artifacts and concatenate the per-target sums into a single `SHA256SUMS` in `sha256sum -c` format. The tarballs and `SHA256SUMS` are kept as pipeline artifacts.
+**`package`** takes the binary `build-musl` produced (as an artifact, never rebuilt), verifies it (architecture, static linking, stripped, `--version`, smoke tests), assembles the tarball above, and writes `SHA256SUMS` in `sha256sum -c` format. The tarball and `SHA256SUMS` are kept as pipeline artifacts.
 
-**`verify-artifacts`**: runs Phase 14's installer tests (clean containers, tampered checksum, malicious tar member) against those pipeline artifacts. A prerelease tag therefore exercises build, test, packaging, checksums and verification end to end without publishing anything (§28 D4).
+**`verify-installer-debian`** and **`verify-installer-alpine`** run Phase 14's installer tests (clean containers, tampered checksum, malicious tar member) against those pipeline artifacts. A prerelease tag therefore exercises build, test, packaging, checksums and verification end to end without publishing anything (§28 D4).
+
+**`auth-check`** runs on prerelease tags only. It makes one read-only GitHub API call with the release token and requires it to be accepted with write access to the repository, so a broken credential is found before a stable release, without publishing anything.
 
 **`publish`**: exists only in pipelines for stable tags matching `^v[0-9]+\.[0-9]+\.[0-9]+$`, runs only on protected tags, and is `when: manual`. Publication is always a deliberate human action, never a side effect of pushing a tag. It runs `gh release create` against the canonical GitHub repository. It uploads the x86_64 tarball plus `SHA256SUMS` (one tarball while aarch64 is deferred — §28 D8), uses release notes extracted from the `CHANGELOG.md` section matching the tag, and passes `--verify-tag`, so the tag must already exist on GitHub. Its only credential is a dedicated, least-privilege GitHub token (§28 D5), stored as a masked and protected GitLab CI/CD variable and never printed.
 
@@ -2282,17 +2293,17 @@ SemVer, `0.y.z` until the config schema is stable. Pre-1.0, a breaking config ch
 2. Bump `version` in `salat/Cargo.toml`; `cargo check` to refresh the lockfile.
 3. Commit `chore(release): 0.2.0`, push to `gitlab`, wait for a green pipeline, then push the same commit to `origin` (§22.1).
 4. `git tag -a v0.2.0 -m 'salat 0.2.0' && git push gitlab v0.2.0`.
-5. The tag pipeline verifies, builds the x86_64 target (§28 D8), aggregates `SHA256SUMS` and verifies the artifacts. When it is green, `git push origin v0.2.0`, then start the manual `publish` job, which creates the GitHub Release.
+5. The tag pipeline verifies the version, builds the x86_64 target (§28 D8), packages the tarball and `SHA256SUMS`, and runs the installer tests on them. When it is green, `git push origin v0.2.0`, then start the manual `publish` job, which creates the GitHub Release.
 6. Verify the published artifacts by running the real install path on a clean x86_64 container (§28 D8).
 
 A prerelease (`v0.1.0-rc.1`) follows steps 1–5 up to the green tag pipeline and stops. It produces no GitHub Release.
 
-**End-to-end path, stated once:** tag `v0.2.0` → pushed to `gitlab` → `verify` confirms `Cargo.toml` says `0.2.0` → a `cross` build produces the static x86_64 musl binary → it is tarred with docs and the unit file → its digest is written to `SHA256SUMS` → the artifacts pass the installer tests → the tag is pushed to `origin` → the manual `publish` job runs `gh release create v0.2.0` and uploads two assets to GitHub Releases → `install.sh` resolves `/releases/latest` to `v0.2.0`, downloads the tarball for the detected arch plus `SHA256SUMS`, verifies, extracts, installs to `~/.local/bin/salat`, smoke-tests `--version` → the user runs `salat`.
+**End-to-end path, stated once:** tag `v0.2.0` → pushed to `gitlab` → `verify-version` confirms `Cargo.toml` says `0.2.0` → a `cross` build produces the static x86_64 musl binary → it is tarred with docs and the unit file → its digest is written to `SHA256SUMS` → the artifacts pass the installer tests → the tag is pushed to `origin` → the manual `publish` job runs `gh release create v0.2.0` and uploads two assets to GitHub Releases → `install.sh` resolves `/releases/latest` to `v0.2.0`, downloads the tarball for the detected arch plus `SHA256SUMS`, verifies, extracts, installs to `~/.local/bin/salat`, smoke-tests `--version` → the user runs `salat`.
 
 ### 22.4 Developer setup
 
 ```bash
-git clone https://github.com/OWNER/Salat && cd Salat
+git clone https://github.com/linuxcoding-ADAM/Salat && cd Salat
 cargo run              # quick mode
 cargo run -- --full    # full TUI
 cargo test

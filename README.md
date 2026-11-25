@@ -36,6 +36,7 @@ palette, no mouse required, and nothing running that you did not ask for.
 - [Adhan audio](#adhan-audio)
 - [Running as a user service (systemd)](#running-as-a-user-service-systemd)
 - [How it works](#how-it-works)
+- [Troubleshooting](#troubleshooting)
 - [Privacy and network use](#privacy-and-network-use)
 - [Files on disk](#files-on-disk)
 - [Development](#development)
@@ -107,8 +108,9 @@ directly, then check the result with `salat config`.
 
 Requirements:
 
-- Linux on `x86_64` (64-bit Intel/AMD PCs). ARM (`aarch64`) is not
-  supported yet, and Windows and macOS are not supported.
+- Linux on `x86_64` (64-bit Intel/AMD PCs), the only supported platform.
+  Linux on ARM64 (`aarch64`) is planned. Windows and macOS are not
+  supported, and WSL2 is not officially supported.
 - `curl` or `wget`, `tar`, and `sha256sum` or `shasum` (present on almost
   every distribution)
 - Optional: an audio player for Adhan (see [Adhan audio](#adhan-audio))
@@ -140,12 +142,12 @@ Upgrading, uninstalling and building from source are covered in
 
 | Command | What it does |
 |---|---|
-| `salat` | Quick live view: today's times, next prayer and countdown. |
+| `salat` | Quick live view: today's times, next prayer and countdown. When output is piped or redirected, it prints one plain frame instead, like `--once`. |
 | `salat --full` | Full interactive TUI. |
 | `salat --once` | Print one frame and exit. Safe for pipes and status bars. |
 | `salat status` | Print system status and exit (exit 0 healthy, 1 down). |
 | `salat config` | Print the resolved scope, file paths and effective configuration. |
-| `salat config --edit` | Open the configuration in `$EDITOR`; the result is validated on save. |
+| `salat config --edit` | Open the configuration in `$VISUAL`, `$EDITOR` or `vi`; the result is validated when the editor exits. |
 | `salat test-adhan` | Play the configured Adhan and exit. |
 | `salat daemon` | Run the scheduler headlessly, for systemd. |
 | `salat daemon --once` | Run one catch-up pass and exit, for cron-style use. |
@@ -156,12 +158,22 @@ Global flags:
 |---|---|
 | `--config <PATH>` | Use another configuration file. It gets its own database and lock, so it is a fully separate instance. |
 | `--no-color` | Disable colour. `NO_COLOR` is also honoured. |
-| `-v`, `-vv`, … | Raise the log level. |
+| `-v`, `-vv` | Raise the log level from `info` to `debug` (`-v`) or `trace` (`-vv`). A non-empty `RUST_LOG` overrides it. The log is `~/.local/state/salat/salat.log`. |
 | `-h`, `--help` / `-V`, `--version` | Help and version. |
 
-Exit codes: `0` success, `1` a scheduler conflict or a fatal runtime error,
-`3` a configuration error. Error codes such as `E903` (scheduler already
-running) are printed with a message that says what to do next.
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | A runtime error, including a scheduler conflict (`E903`) |
+| `2` | A command-line usage error |
+| `3` | A configuration error (`E201`, `E202`) |
+| `4` | Prayer data unavailable or the API failed (`E301`–`E304`) |
+
+Errors are printed with a code such as `E903` (scheduler already running)
+and the details; [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
+explains each code.
 
 ## Using the interface
 
@@ -193,11 +205,29 @@ Keys used throughout:
 | `q` | Quit (`Ctrl-C` always quits) |
 | `Ctrl-L` | Force a full redraw |
 
+### Terminal size
+
+The layout follows the terminal size, and each step needs both the width
+and the height:
+
+| Terminal size | Layout |
+|---|---|
+| below 80×24 | A "too small" notice; resize to continue |
+| 80×24 or more | Compact, stacked layout |
+| 100×30 or more | The full two-column dashboard |
+| 120×35 or more | The large layout |
+
+A wide but short window, such as 170×29, is one row short of 100×30 and
+shows the stacked layout. Make the window taller, or switch the terminal to
+fullscreen (`F11` in most terminal emulators); the layout updates as soon
+as the terminal is resized.
+
 ## Configuration
 
 The configuration is a TOML file at `~/.config/salat/config.toml`, created
-with defaults on first run. Every key is optional, and unknown keys are
-rejected with the line number, so a typo is reported rather than ignored.
+with defaults on first run. Every key except `version` is optional, and
+unknown keys are rejected with the line number, so a typo is reported rather
+than ignored.
 
 A short example:
 
@@ -230,8 +260,8 @@ volume = 80                         # 0..=100
 
 The full key reference, with every default and valid range, is in
 [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md). Changes made in the
-interface take effect on save. You can also send the daemon `SIGHUP` to
-reload the file.
+interface take effect on save. Salat does not watch the file, so after a
+hand edit send the running Salat or daemon `SIGHUP`, or restart it.
 
 ### Choosing a calculation method
 
@@ -265,12 +295,33 @@ Salat works fully as a foreground program, and that is the default. The
 systemd user service is for the case where you want **notifications and the
 Adhan with no terminal open.**
 
+Run `salat` once first so its directories exist, then download the unit
+for this release (it is not installed by the installer):
+
 ```sh
 mkdir -p ~/.config/systemd/user
-cp packaging/systemd/salat.service ~/.config/systemd/user/salat.service
+curl -fsSL -o ~/.config/systemd/user/salat.service \
+  https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/v0.1.0/packaging/systemd/salat.service
+```
+
+**Known issue in v0.1.0:** the unit does not let the daemon write its
+scheduler lock in the runtime directory, so it fails with
+`E904 … Read-only file system`. Add this drop-in before starting it:
+
+```sh
+mkdir -p ~/.config/systemd/user/salat.service.d
+printf '[Service]\nReadWritePaths=%%t\n' > ~/.config/systemd/user/salat.service.d/runtime-dir.conf
+```
+
+Then enable and start it:
+
+```sh
 systemctl --user daemon-reload
 systemctl --user enable --now salat
 ```
+
+The known issue is described in
+[`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
 
 Then check it with `systemctl --user status salat` and
 `journalctl --user -u salat -f`. Reload the configuration with
@@ -279,8 +330,9 @@ Then check it with `systemctl --user status salat` and
 the event log, releases the scheduler lock and stops any playing Adhan.
 
 The unit is sandboxed: `NoNewPrivileges`, a read-only filesystem apart from
-Salat's own three directories, `PrivateTmp`, and `MemoryMax=128M`. It does
-not restart after a configuration error, because retrying cannot fix one.
+Salat's own directories, `PrivateTmp`, and `MemoryMax=128M`. It restarts
+10 seconds after any failed exit, including a configuration error; if it
+keeps restarting, read the reason with `journalctl --user -u salat -e`.
 
 **Only one process owns the schedule at a time.** If the daemon is running,
 `salat --full` shows everything but fires nothing, and reports
@@ -312,6 +364,14 @@ user units start at boot. The full guide, including removal, is in
 
 The complete design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 which is the source of truth for implementation decisions.
+
+## Troubleshooting
+
+Start with `salat status`, which checks every component, and the log at
+`~/.local/state/salat/salat.log` (`-v` for more detail).
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) covers installation
+problems, the terminal layout, network and prayer-time errors, Adhan audio,
+notifications, the daemon and systemd, and every error code.
 
 ## Privacy and network use
 
@@ -356,10 +416,11 @@ Layout:
 | `salat/tests/` | Integration tests and recorded AlAdhan fixtures |
 | `xtask/` | Maintenance tasks, such as `cargo run -p xtask -- gen-cities` and `cargo run -p xtask -- check-fixtures` |
 | `packaging/systemd/` | The user service unit |
-| `docs/` | Architecture, configuration and installation guides |
+| `docs/` | Architecture, configuration, installation, troubleshooting and known-issues guides |
 
-The toolchain is pinned by `rust-toolchain.toml`. The monthly AlAdhan drift
-check and contribution conventions are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+The toolchain is pinned by `rust-toolchain.toml`. Setup, snapshot review,
+the CI gate, the release procedure and the monthly AlAdhan drift check are
+in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Status and roadmap
 

@@ -5,9 +5,11 @@ user service, and take it back off again.
 
 ## Requirements
 
-- Linux on `x86_64` (64-bit Intel/AMD PCs). ARM (`aarch64`) is not
-  supported yet; the installer says so and stops. Windows and macOS are
-  not supported.
+- Linux on `x86_64` (64-bit Intel/AMD PCs) — the only supported
+  platform. Linux on ARM64 (`aarch64`) is planned; until then the
+  installer says so and stops. Windows and macOS are not supported.
+  WSL2 is not officially supported (see
+  [Platform support](TROUBLESHOOTING.md#platform-support)).
 - A tokio-capable kernel — in practice, any Linux from the last decade.
 - For the installer: `curl` or `wget`, `tar`, and `sha256sum` or
   `shasum`. The installer refuses to continue without a checksum tool.
@@ -42,7 +44,8 @@ outside the install directory and your temporary directory, and never
 edits a shell rc file.
 
 It prints the tarball's download URL and its verified SHA-256 as it
-runs.
+runs. If something goes wrong — including `salat: command not found`
+afterwards — see [Troubleshooting](TROUBLESHOOTING.md#installation).
 
 ### Installer options
 
@@ -119,20 +122,52 @@ the other arrangement: **notifications and Adhan with no terminal
 open.** `salat daemon` runs the prayer-time engine headlessly; the
 unit file is the supported way to keep it alive.
 
-### 1. Install the binary
+### 1. Install the binary and run it once
 
 The unit expects `~/.local/bin/salat`, the installer's default
 location (or build from source and install it there, as above).
 
+Run `salat` once before enabling the unit. That creates Salat's
+configuration, data and state directories, which the unit makes
+writable — systemd will not start a unit whose `ReadWritePaths` do
+not exist.
+
 ### 2. Install the unit
 
-The unit file ships in the repository at
-`packaging/systemd/salat.service`. It is documented, never installed
-automatically — enabling it is two commands:
+The unit file is `packaging/systemd/salat.service` in the repository
+(it is also inside the release tarball). It is documented, never
+installed automatically — the installer does not set it up. Download
+the copy that belongs to v0.1.0 into your user unit directory:
+
+```sh
+mkdir -p ~/.config/systemd/user
+curl -fsSL -o ~/.config/systemd/user/salat.service \
+  https://raw.githubusercontent.com/linuxcoding-ADAM/Salat/v0.1.0/packaging/systemd/salat.service
+```
+
+From a clone of the repository, copy it instead:
 
 ```sh
 mkdir -p ~/.config/systemd/user
 cp packaging/systemd/salat.service ~/.config/systemd/user/salat.service
+```
+
+**Known issue in v0.1.0:** the unit does not make the runtime
+directory writable, so the daemon cannot create its scheduler lock and
+fails with `E904 … Read-only file system`. Add this drop-in before
+starting it:
+
+```sh
+mkdir -p ~/.config/systemd/user/salat.service.d
+printf '[Service]\nReadWritePaths=%%t\n' > ~/.config/systemd/user/salat.service.d/runtime-dir.conf
+```
+
+(`%t` is systemd's name for your runtime directory, `/run/user/<uid>`;
+see [Known issues](KNOWN_ISSUES.md) and
+[Troubleshooting](TROUBLESHOOTING.md#known-issue-in-v010-the-systemd-unit-fails-with-e904).)
+Then load the unit:
+
+```sh
 systemctl --user daemon-reload
 ```
 
@@ -175,9 +210,9 @@ systemctl --user stop salat
 | Directive | Meaning |
 |---|---|
 | `After=graphical-session.target` | Wait for the session (D-Bus, audio) to exist. |
-| `Restart=on-failure`, `RestartSec=10s` | Retry after a crash — but not after a configuration error (exit 3), which retrying cannot fix. |
+| `Restart=on-failure`, `RestartSec=10s` | Restart 10 seconds after any failed exit — a crash, but also a configuration error (exit 3), which a restart cannot fix. If the unit keeps restarting, read the reason with `journalctl --user -u salat -e`. |
 | `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict` | The process cannot gain privileges, gets a private `/tmp`, and sees the filesystem read-only. |
-| `ProtectHome=read-only` + `ReadWritePaths=…` | Home is read-only except Salat's three own directories: `~/.config/salat`, `~/.local/share/salat`, `~/.local/state/salat`. That is the whole filesystem surface Salat needs. |
+| `ProtectHome=read-only` + `ReadWritePaths=…` | Home is read-only except Salat's three own directories: `~/.config/salat`, `~/.local/share/salat`, `~/.local/state/salat`. Salat also needs its runtime directory for the scheduler lock, which the v0.1.0 unit omits (see the known issue above). |
 | `ProtectKernelTunables`, `ProtectControlGroups`, `RestrictNamespaces` | No kernel or container escapes. |
 | `MemoryMax=128M` | The daemon is a 1 Hz loop; if it ever exceeds 128 MB, systemd stops it rather than letting it starve the machine. |
 
@@ -221,6 +256,7 @@ if you would rather not run the service at all).
 ```sh
 systemctl --user disable --now salat
 rm ~/.config/systemd/user/salat.service
+rm -rf ~/.config/systemd/user/salat.service.d    # the drop-in, if you added it
 systemctl --user daemon-reload
 systemctl --user reset-failed
 ```
