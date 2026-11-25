@@ -171,7 +171,9 @@ n=$(grep -c '^DOWNLOAD_BASE=' install.sh || true)
 [ "$n" = 1 ] || die "install.sh must contain exactly one 'DOWNLOAD_BASE=' line (found $n)"
 mkdir -p "$T"
 sed "s|^DOWNLOAD_BASE=.*|DOWNLOAD_BASE=\"http://127.0.0.1:$PORT\"|" install.sh >"$T/install.sh"
-changed=$(diff install.sh "$T/install.sh" | grep -c '^[<>]' || true)
+# `diff -u` prints the same way in GNU and busybox diff; count changed lines
+# (one removed + one added) and ignore the two file-header lines.
+changed=$(diff -u install.sh "$T/install.sh" | grep -E '^[-+]' | grep -cvE '^(---|\+\+\+)' || true)
 [ "$changed" = 2 ] || die "the test copy must differ from install.sh in exactly one line (diff: $changed lines)"
 note "test copy: install.sh with only DOWNLOAD_BASE rewritten to http://127.0.0.1:$PORT"
 
