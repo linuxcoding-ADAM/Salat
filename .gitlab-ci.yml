@@ -15,10 +15,13 @@
 #            artifacts; manual on branches and MRs, automatic on tags;
 #            created only once install.sh exists
 #
+#   release  publish   manual, stable vX.Y.Z protected tags only (§22.2)
+#
+# Tag pipelines also run verify-version (tag == Cargo version, fails in
+# seconds, gates build-musl) and, on prerelease tags only, auth-check.
+#
 # Artifacts flow strictly build-musl → package → verify-installer-* via
-# `needs`; nothing downstream recompiles. aarch64 is deferred (§28 D8). The
-# release-publishing jobs of §22.2 (verify-version, auth-check, publish) are
-# added in a later Phase 14 step.
+# `needs`; nothing downstream recompiles. aarch64 is deferred (§28 D8).
 #
 # Free-tier notes (§28 D6): jobs run on GitLab's default shared runner
 # (saas-linux-small-amd64); cargo-deny, cross and the Docker CLI are
@@ -43,6 +46,7 @@ stages:
   - build
   - package
   - verify
+  - release
 
 variables:
   # Keep cargo's home inside the project directory so GitLab can cache it.
@@ -107,8 +111,12 @@ check:
 build-musl:
   extends: .rust
   stage: build
-  # Starts at once, in parallel with the check stage.
-  needs: []
+  # Starts at once, in parallel with the check stage — except on tags,
+  # where it waits for verify-version so a wrong tag fails before the
+  # cross-compile (the job does not exist on branches, hence optional).
+  needs:
+    - job: verify-version
+      optional: true
   services:
     - name: docker:29-dind@sha256:4bbc7223f81db790097c6dea42fb93e05b8fead4f0431fbe6ccaba6e8473201c
       alias: docker
@@ -265,3 +273,54 @@ verify-installer-alpine:
   image: $ALPINE_IMAGE
   script:
     - sh ci/verify-installer.sh alpine
+
+# ---- Release jobs (§22.2) — tag pipelines only -------------------------
+
+# The tag must equal the salat crate's Cargo version exactly. Runs for
+# stable and prerelease tags; seconds, and gates build-musl above.
+verify-version:
+  extends: .rust
+  stage: check
+  needs: []
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq
+    - sh ci/verify-version.sh
+
+# Prerelease tags only: proves the publishing token works with one
+# read-only GitHub API call. Needs GITHUB_RELEASE_TOKEN (masked, protected),
+# so it can only succeed on a protected tag. Publishes nothing.
+auth-check:
+  stage: check
+  image: $ALPINE_IMAGE
+  needs: []
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+-/
+  script:
+    - apk add --no-cache curl jq
+    - sh ci/auth-check.sh
+
+# Stable vX.Y.Z tags only, protected refs only, and only by hand. A
+# prerelease tag never gets this job. Uses this pipeline's own tarball and
+# SHA256SUMS, and only after both installer jobs passed.
+publish:
+  stage: release
+  image: $ALPINE_IMAGE
+  needs:
+    - job: package
+      artifacts: true
+    - job: verify-version
+      artifacts: false
+    - job: verify-installer-debian
+      artifacts: false
+    - job: verify-installer-alpine
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $CI_COMMIT_REF_PROTECTED == "true"
+      when: manual
+      allow_failure: true
+  interruptible: false
+  script:
+    - apk add --no-cache github-cli
+    - sh ci/publish.sh
