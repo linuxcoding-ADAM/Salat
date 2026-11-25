@@ -1,3 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["salat", "xtask"]
+
+# Release binaries ship stripped (§22.2's `build` job). Stripping in the
+# profile works for every target, including cross-compiled ones, which the
+# host's `strip` cannot process.
+[profile.release]
+strip = true

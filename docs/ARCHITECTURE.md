@@ -55,7 +55,7 @@ Development proceeds through **16 phases**, each of which leaves the repository 
 | Status | The 10 components and event log the Figma Status screen shows |
 | Persistence | TOML config, SQLite cache + event log + fired ledger + completions |
 | Background service | `salat daemon` + shipped systemd **user** unit |
-| Distribution | `curl … install.sh \| sh`, precompiled static musl binaries, x86_64 + aarch64 |
+| Distribution | `curl … install.sh \| sh`, precompiled static musl binaries, x86_64 (aarch64 deferred past v0.1.0 — §28 D8) |
 
 ### 2.2 Explicitly out of scope for v1
 
@@ -2115,7 +2115,7 @@ End state: `salat` is an executable on the user's `PATH`. No Rust, no Cargo, no 
 | 2 | Parse `--prefix DIR`, `--version vX.Y.Z`, `--uninstall`, `--help` | unknown flag → usage, exit 2 |
 | 3 | Refuse to run as root unless `SALAT_ALLOW_ROOT=1` | message explaining Salat is a per-user tool, exit 1 |
 | 4 | `uname -s` must be `Linux` | otherwise: "salat currently supports Linux only", exit 1 |
-| 5 | `uname -m` → `x86_64\|amd64` ⇒ `x86_64`; `aarch64\|arm64` ⇒ `aarch64` | any other → list supported arches, exit 1 |
+| 5 | `uname -m` → `x86_64\|amd64` ⇒ `x86_64`; `aarch64\|arm64` → not supported yet (§28 D8) | `aarch64`/`arm64` → `salat: aarch64 is not supported yet; supported: x86_64`, exit 1; any other → list supported arches (`x86_64`), exit 1 |
 | 6 | Require `curl` **or** `wget`; require `tar`; require `sha256sum` **or** `shasum` | missing checksum tool → **abort**, never install unverified |
 | 7 | Resolve the tag: `--version`, else parse `/releases/latest` | no tag → exit 1 |
 | 8 | `TMP=$(mktemp -d)`; `trap 'rm -rf "$TMP"' EXIT INT TERM` | — |
@@ -2139,7 +2139,7 @@ End state: `salat` is an executable on the user's `PATH`. No Rust, no Cargo, no 
 
 Two hard requirements make this non-negotiable: the binary must run on any glibc version (Debian oldstable through Arch), and the audio subsystem must not link ALSA or PulseAudio (§13.1). Consequences:
 
-- Target `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`.
+- Target `x86_64-unknown-linux-musl`. (`aarch64-unknown-linux-musl` is deferred past v0.1.0 — §28 D8; nothing in this section is x86_64-specific, so it returns as one more target.)
 - TLS is **rustls**, never OpenSSL — no `libssl` to find at runtime.
 - DNS is **hickory-dns**, because musl's resolver lacks features glibc's provides and does not read all the configuration users expect.
 - SQLite is **bundled** (`libsqlite3-sys/bundled`), compiled into the binary.
@@ -2237,13 +2237,13 @@ Tag pipelines run for two tag forms, both validated against `Cargo.toml`:
 # jobs (tag pipelines only)
 #   verify:            assert Cargo.toml version == tag (fail fast, before building anything)
 #   check jobs:        the five §22.1 jobs, re-run
-#   build:             matrix: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+#   build:             x86_64-unknown-linux-musl (aarch64 deferred — §28 D8)
 #   checksums:         aggregate SHA256SUMS
 #   verify-artifacts:  the installer tests of Phase 14 against this pipeline's own artifacts
 #   publish:           manual, stable tags only: create the GitHub Release
 ```
 
-**`verify`** exists because the single most common release mistake is a tag that disagrees with `Cargo.toml`, producing a `v0.2.0` release whose binary reports `0.1.0`. It reads the version with `cargo metadata` and requires `${CI_COMMIT_TAG#v}` to equal it **exactly**. It accepts any version Cargo accepts, including a SemVer prerelease suffix, so `v0.1.0-rc.1` passes only when `Cargo.toml` says `0.1.0-rc.1`. It fails in ten seconds rather than after two cross-compiles.
+**`verify`** exists because the single most common release mistake is a tag that disagrees with `Cargo.toml`, producing a `v0.2.0` release whose binary reports `0.1.0`. It reads the version with `cargo metadata` and requires `${CI_COMMIT_TAG#v}` to equal it **exactly**. It accepts any version Cargo accepts, including a SemVer prerelease suffix, so `v0.1.0-rc.1` passes only when `Cargo.toml` says `0.1.0-rc.1`. It fails in ten seconds rather than after the cross-compile.
 
 **`build`** (per target): install the toolchain, build with `cross` (musl cross-linking without hand-managed sysroots), `strip`, assemble a staging directory, and produce:
 
@@ -2263,15 +2263,16 @@ The tarball has one top-level directory (no tarbombs), and `install.sh` reads `*
 
 **`verify-artifacts`**: runs Phase 14's installer tests (clean containers, tampered checksum, malicious tar member) against those pipeline artifacts. A prerelease tag therefore exercises build, test, packaging, checksums and verification end to end without publishing anything (§28 D4).
 
-**`publish`**: exists only in pipelines for stable tags matching `^v[0-9]+\.[0-9]+\.[0-9]+$`, runs only on protected tags, and is `when: manual`. Publication is always a deliberate human action, never a side effect of pushing a tag. It runs `gh release create` against the canonical GitHub repository. It uploads the two tarballs plus `SHA256SUMS`, uses release notes extracted from the `CHANGELOG.md` section matching the tag, and passes `--verify-tag`, so the tag must already exist on GitHub. Its only credential is a dedicated, least-privilege GitHub token (§28 D5), stored as a masked and protected GitLab CI/CD variable and never printed.
+**`publish`**: exists only in pipelines for stable tags matching `^v[0-9]+\.[0-9]+\.[0-9]+$`, runs only on protected tags, and is `when: manual`. Publication is always a deliberate human action, never a side effect of pushing a tag. It runs `gh release create` against the canonical GitHub repository. It uploads the x86_64 tarball plus `SHA256SUMS` (one tarball while aarch64 is deferred — §28 D8), uses release notes extracted from the `CHANGELOG.md` section matching the tag, and passes `--verify-tag`, so the tag must already exist on GitHub. Its only credential is a dedicated, least-privilege GitHub token (§28 D5), stored as a masked and protected GitLab CI/CD variable and never printed.
 
 Asset naming, fixed and parseable by the installer:
 
 ```
 salat-0.1.0-x86_64-unknown-linux-musl.tar.gz
-salat-0.1.0-aarch64-unknown-linux-musl.tar.gz
 SHA256SUMS
 ```
+
+The naming scheme already covers other targets: when aarch64 returns (§28 D8) it adds `salat-<version>-aarch64-unknown-linux-musl.tar.gz` and one more `SHA256SUMS` line, and nothing else changes.
 
 ### 22.3 Versioning and the release procedure
 
@@ -2281,12 +2282,12 @@ SemVer, `0.y.z` until the config schema is stable. Pre-1.0, a breaking config ch
 2. Bump `version` in `salat/Cargo.toml`; `cargo check` to refresh the lockfile.
 3. Commit `chore(release): 0.2.0`, push to `gitlab`, wait for a green pipeline, then push the same commit to `origin` (§22.1).
 4. `git tag -a v0.2.0 -m 'salat 0.2.0' && git push gitlab v0.2.0`.
-5. The tag pipeline verifies, builds both targets, aggregates `SHA256SUMS` and verifies the artifacts. When it is green, `git push origin v0.2.0`, then start the manual `publish` job, which creates the GitHub Release.
-6. Verify the published artifacts by running the real install path on a clean container for both architectures.
+5. The tag pipeline verifies, builds the x86_64 target (§28 D8), aggregates `SHA256SUMS` and verifies the artifacts. When it is green, `git push origin v0.2.0`, then start the manual `publish` job, which creates the GitHub Release.
+6. Verify the published artifacts by running the real install path on a clean x86_64 container (§28 D8).
 
 A prerelease (`v0.1.0-rc.1`) follows steps 1–5 up to the green tag pipeline and stops. It produces no GitHub Release.
 
-**End-to-end path, stated once:** tag `v0.2.0` → pushed to `gitlab` → `verify` confirms `Cargo.toml` says `0.2.0` → two `cross` builds produce static musl binaries → each is tarred with docs and the unit file → digests are aggregated into `SHA256SUMS` → the artifacts pass the installer tests → the tag is pushed to `origin` → the manual `publish` job runs `gh release create v0.2.0` and uploads three assets to GitHub Releases → `install.sh` resolves `/releases/latest` to `v0.2.0`, downloads the tarball for the detected arch plus `SHA256SUMS`, verifies, extracts, installs to `~/.local/bin/salat`, smoke-tests `--version` → the user runs `salat`.
+**End-to-end path, stated once:** tag `v0.2.0` → pushed to `gitlab` → `verify` confirms `Cargo.toml` says `0.2.0` → a `cross` build produces the static x86_64 musl binary → it is tarred with docs and the unit file → its digest is written to `SHA256SUMS` → the artifacts pass the installer tests → the tag is pushed to `origin` → the manual `publish` job runs `gh release create v0.2.0` and uploads two assets to GitHub Releases → `install.sh` resolves `/releases/latest` to `v0.2.0`, downloads the tarball for the detected arch plus `SHA256SUMS`, verifies, extracts, installs to `~/.local/bin/salat`, smoke-tests `--version` → the user runs `salat`.
 
 ### 22.4 Developer setup
 
@@ -2556,18 +2557,18 @@ Each phase specifies the twelve required items: **goal · scope · files · inte
 
 ### Phase 14 — Packaging, release and installation
 
-1. **Goal.** A user with no Rust toolchain installs Salat with one command, on both architectures.
+1. **Goal.** A user with no Rust toolchain installs Salat with one command, on an x86_64 Linux PC (aarch64 deferred — §28 D8).
 2. **Scope.** `install.sh` complete, the check jobs of `.gitlab-ci.yml` finalized, its release jobs (§22.2), cross-compilation, tarball assembly, `SHA256SUMS`, and a real end-to-end test of the published path.
 3. **Files.** `install.sh`, `.gitlab-ci.yml`, `Cross.toml`, `docs/INSTALL.md`.
 4. **Interfaces.** The CLI contract of §21.2 (`--prefix`, `--version`, `--uninstall`, `--purge`, `--force`, `--help`) and the fixed asset names of §22.2.
 5. **Data models.** None — this phase is shell and YAML.
 6. **Dependencies.** A working binary from Phases 0–13. `cross` in CI.
 7. **Order.** local musl build → tarball layout → `install.sh` (arch detect → tag resolve → download → **verify** → validate members → extract → install → smoke test → PATH advice) → `--uninstall` → the release jobs of `.gitlab-ci.yml` → a pre-release tag (`v0.1.0-rc.1`, §28 D4) → verify on clean containers → shellcheck → docs.
-8. **Automated tests.** `shellcheck install.sh` clean; a CI job that runs `install.sh` against the just-built release artifacts inside `debian:oldstable` and `alpine` containers for both arches and asserts `salat --version`; a job that mutates `SHA256SUMS` and asserts the installer **refuses to install**; a job asserting a malicious tarball member (`../evil`) is rejected.
-9. **Manual tests.** The exact `curl … | sh` command on Fedora, Ubuntu LTS, Debian oldstable, Arch and Alpine, on x86_64 and aarch64; install → upgrade → uninstall; install with `$HOME/.local/bin` absent from `PATH` and follow the printed advice; run as root and confirm refusal; run with `sha256sum` removed from `PATH` and confirm abort.
+8. **Automated tests.** `shellcheck install.sh` clean; a CI job that runs `install.sh` against the just-built release artifacts inside `debian:oldstable` and `alpine` x86_64 containers (§28 D8) and asserts `salat --version`; a job that mutates `SHA256SUMS` and asserts the installer **refuses to install**; a job asserting a malicious tarball member (`../evil`) is rejected.
+9. **Manual tests.** The exact `curl … | sh` command on Fedora, Ubuntu LTS, Debian oldstable, Arch and Alpine, on x86_64 (aarch64 deferred — §28 D8); install → upgrade → uninstall; install with `$HOME/.local/bin` absent from `PATH` and follow the printed advice; run as root and confirm refusal; run with `sha256sum` removed from `PATH` and confirm abort.
 10. **Commands.** `shellcheck install.sh`, `cargo build --release --target x86_64-unknown-linux-musl`, `sh install.sh --prefix /tmp/p`, `sh install.sh --uninstall`, `git tag v0.1.0-rc.1 && git push gitlab v0.1.0-rc.1`.
-11. **Expected results.** A single ~4–5 MB gzipped asset per arch; install completes in a few seconds; `salat` is on `PATH`; checksum tampering always aborts.
-12. **DoD.** The full §22.3 path executed for a real test tag, up to and excluding publication (a prerelease tag never publishes — §28 D4); both arches verified on a clean container; the installer refuses every unverified path; `README.md` shows the one-line install.
+11. **Expected results.** A single ~4–5 MB gzipped x86_64 asset; install completes in a few seconds; `salat` is on `PATH`; checksum tampering always aborts.
+12. **DoD.** The full §22.3 path executed for a real test tag, up to and excluding publication (a prerelease tag never publishes — §28 D4); x86_64 verified on clean containers (§28 D8); the installer refuses every unverified path; `README.md` shows the one-line install.
 
 ---
 
@@ -2583,8 +2584,8 @@ Each phase specifies the twelve required items: **goal · scope · files · inte
 8. **Automated tests.** A CI job asserting every config key in `Config` appears in `docs/CONFIGURATION.md` (a simple reflective test over the TOML template) and that the README's install command matches the repository's real raw URL; a link checker over the docs.
 9. **Manual tests.** Read the README as a newcomer on GitHub — dark and light — and confirm the screenshots are legible; follow INSTALL on a fresh machine with no prior knowledge; run the whole §20.4 checklist one final time.
 10. **Commands.** `cargo run -p xtask -- screenshots`, `cargo test docs`, then the §22.3 release procedure for `v0.1.0`.
-11. **Expected results.** `v0.1.0` published with two verified binaries and working one-line installation.
-12. **DoD.** Every §20.4 manual item passes; documentation covers every user-facing feature; the privacy disclosure is present; the release is installed and verified from the public URL on both architectures.
+11. **Expected results.** `v0.1.0` published with a verified x86_64 binary (§28 D8) and working one-line installation.
+12. **DoD.** Every §20.4 manual item passes; documentation covers every user-facing feature; the privacy disclosure is present; the release is installed and verified from the public URL on x86_64 (§28 D8).
 
 ---
 
@@ -2628,7 +2629,7 @@ One concrete, observable thing that proves each phase actually landed. If it can
 | 12 | `salat status` and the STATUS screen report the same ten components, and each one is broken on purpose to confirm honesty |
 | 13 | Notifications arrive with no terminal open, and exactly once when the TUI is also running |
 | 14 | `curl -fsSL …/install.sh \| sh` on a clean container yields a working `salat`, and a tampered checksum aborts |
-| 15 | `v0.1.0` is published and installed from the public URL on both architectures |
+| 15 | `v0.1.0` is published and installed from the public URL on x86_64 (§28 D8) |
 
 ---
 
@@ -2808,7 +2809,7 @@ The `publish` job authenticates to GitHub with a dedicated, least-privilege toke
 The pipeline is designed for GitLab Free and does not depend on any paid or programme-granted feature. Constraints taken into account:
 
 - **Compute minutes are limited.** Jobs install `cross` and `cargo-deny` from their prebuilt releases rather than compiling them, and use the `Cargo.lock`-keyed cache.
-- **aarch64 runners.** Arm64 shared runners are listed for the project but had not run a job when this was written. aarch64 binaries are built with `cross` on x86_64 either way (§22.2). Only the aarch64 clean-container install test depends on arm64 runners being usable.
+- **aarch64 runners.** *Superseded by D8:* aarch64 is deferred past v0.1.0, so no arm64 runner is used. (When written: arm64 shared runners were listed for the project but had not run a job.)
 - **Docker-in-Docker.** `cross` needs a Docker-in-Docker service on the shared Linux runners. This is proven by the first pipeline, not assumed.
 - **GitLab for Open Source** may raise these limits. Its eligibility is being investigated, but nothing in this design depends on it.
 
@@ -2824,6 +2825,25 @@ What deliberately stays lowercase, and is **not** part of this rename:
 - the GitLab CI/CD project: `gitlab.com/linuxcoding-ADAM/salat`.
 
 A clone now creates a `Salat/` directory, so clone instructions say `cd Salat`.
+
+### D8 — v0.1.0 targets x86_64 Linux PCs; aarch64 is deferred (2026-11-25)
+
+**Decision.** The v0.1.0 release targets standard Linux desktop PCs with 64-bit Intel/AMD processors (`x86_64`). ARM (`aarch64`) is **deferred**, not dropped: Raspberry Pi, ARM laptops and ARM servers are not targets of this release.
+
+**What the plan originally committed to**, kept here as history: static musl binaries for `x86_64` **and** `aarch64` (§2.1, §21.3); an aarch64 build in the release matrix and an aarch64 tarball (§22.2); verification "for both architectures" (§22.3 step 6); Phase 14's goal, automated tests (Debian and Alpine "for both arches"), manual tests ("on x86_64 and aarch64") and DoD ("both arches verified"); Phase 15's expected results ("two verified binaries") and DoD, plus §24.2's Phase 15 signal ("on both architectures"); and §28 D6's arm64-runner constraint. Each of those places now reads x86_64 and points here.
+
+**Deferred**, until a later release brings aarch64 back:
+
+- the `aarch64-unknown-linux-musl` build and its tarball, `salat-<version>-aarch64-unknown-linux-musl.tar.gz`;
+- its line in `SHA256SUMS`;
+- the aarch64 installer tests (Debian and Alpine on arm64) and the aarch64 manual tests;
+- arm64 CI runners.
+
+**What does not change.** Everything else in Phase 14 stays as specified. That includes all of §21.2, the checksum verification before extraction, the archive member validation, the root refusal, upgrade and `--force`, `--uninstall` and `--purge`, the Debian and Alpine installer tests, the tamper and `../evil` tests, and the release safeguards of §22.2 and D4. No application code is architecture-specific, and §21.3's design choices (musl, rustls, bundled SQLite, no linked audio library, hickory DNS) are architecture-neutral.
+
+**The installer is explicit about it.** §21.2 step 5 maps `aarch64`/`arm64` to its existing unsupported-architecture failure: it prints `salat: aarch64 is not supported yet; supported: x86_64` and exits 1 before downloading anything. An ARM user gets a clear message instead of a download error for an asset that does not exist.
+
+**How aarch64 returns.** The asset naming scheme already covers it. Bringing it back means: one more `build` matrix entry, one more `SHA256SUMS` line, re-mapping `aarch64|arm64` in step 5, and the arm64 installer tests. Each place marked "§28 D8" then goes back to its original wording above.
 
 ---
 

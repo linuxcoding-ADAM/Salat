@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crate's repository metadata, the API User-Agent, the clone instructions
   and the installer URL. The crate, binary and runtime paths stay
   `salat` (`docs/ARCHITECTURE.md` §28 D7).
+- v0.1.0 targets x86_64 Linux PCs (64-bit Intel/AMD). ARM (`aarch64`)
+  is deferred to a later release, and the installer will say so rather
+  than fail on a missing download (`docs/ARCHITECTURE.md` §28 D8).
+- Release binaries are built stripped (`[profile.release] strip = true`).
 
 ### Removed
 

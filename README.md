@@ -101,7 +101,7 @@ directly, then check the result with `salat config`.
 
 Requirements:
 
-- Linux on `x86_64` or `aarch64`
+- Linux on `x86_64` (64-bit Intel/AMD PCs); ARM (`aarch64`) is not supported yet
 - A current stable Rust toolchain. The pinned version in
   `rust-toolchain.toml` is installed automatically by `rustup`.
 - Optional: an audio player for Adhan (see [Adhan audio](#adhan-audio))

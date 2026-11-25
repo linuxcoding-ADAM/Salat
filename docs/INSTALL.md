@@ -19,7 +19,8 @@ user service, and take it back off again.
 
 ## Requirements
 
-- Linux, `x86_64` or `aarch64`.
+- Linux on `x86_64` (64-bit Intel/AMD PCs). ARM (`aarch64`) is not
+  supported yet; the installer says so and stops.
 - A tokio-capable kernel — in practice, any Linux from the last decade.
 - Optional: an audio player for Adhan (one of `mpv`, `ffplay`,
   `cvlc`, `aplay` on `$PATH`).
