@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A full contributor guide in `CONTRIBUTING.md`: setup, the checks CI
   runs, snapshot review, conventions, the merge gate and the release
   procedure.
+- Irhzer Amokrane (Ighzer Amokrane, Ouzellaguen, Béjaïa, Algeria;
+  GeoNames 2493079, population 0) is now searchable by name in the
+  built-in city list, through `salat/assets/extra_cities.tsv`.
 
 ### Fixed
 

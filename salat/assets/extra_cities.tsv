@@ -17,3 +17,7 @@
 # Verified 2026-09-08 against https://download.geonames.org/export/dump/DZ.zip:
 #   2478073  Tamokra  P PPL  36.39322  4.66446  admin1 18 (Béjaïa), admin2 2507644 (Daïra d'Akbou)
 2478073	Tamokra	36.39322	4.66446	DZ	Africa/Algiers	0	Béjaïa
+#
+# Verified 2026-11-26 against https://download.geonames.org/export/dump/DZ.zip:
+#   2493079  Irhzer Amokrane  P PPL  36.54203  4.61291  admin1 18 (Béjaïa), admin2 12952441 (Ifri Ouzellaguene)
+2493079	Irhzer Amokrane	36.54203	4.61291	DZ	Africa/Algiers	0	Béjaïa

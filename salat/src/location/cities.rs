@@ -459,7 +459,7 @@ mod tests {
     fn the_embedded_index_parses() {
         let index = load().expect("the committed cities.bin");
         assert_eq!(index.zones.len(), 322);
-        assert_eq!(index.cities.len(), 34_090);
+        assert_eq!(index.cities.len(), 34_203);
     }
 
     /// §9.2's own example: `Setif` finds `Sétif` — diacritic- and
@@ -503,6 +503,30 @@ mod tests {
         let (city, km) = index.nearest(36.39322, 4.66446).expect("a nearest city");
         assert_eq!(city.name, "Tamokra");
         assert!(km < 1.0, "distance was {km} km");
+    }
+
+    /// A second curated extra: Irhzer Amokrane (Ouzellaguen, Béjaïa,
+    /// Algeria; geonameid 2493079, verified against the DZ dump) also
+    /// carries population 0, so the search returns its exact record.
+    #[test]
+    fn curated_irhzer_amokrane_is_searchable_with_exact_coordinates() {
+        let index = load().expect("the committed cities.bin");
+        let results = index.search("Irhzer Amokrane");
+        let top = results.first().expect("the curated match");
+        assert_eq!(top.name, "Irhzer Amokrane");
+        assert_eq!(top.country, "Algeria");
+        assert_eq!(top.cc, "DZ");
+        assert_eq!(top.tz, "Africa/Algiers");
+        assert!(
+            (top.lat - 36.54203).abs() < 1e-6,
+            "latitude was {}",
+            top.lat
+        );
+        assert!(
+            (top.lng - 4.61291).abs() < 1e-6,
+            "longitude was {}",
+            top.lng
+        );
     }
 
     /// The comma form matches too — `Setif, Algeria` and a country
